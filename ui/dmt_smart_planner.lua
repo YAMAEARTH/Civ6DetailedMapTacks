@@ -580,21 +580,51 @@ local function PlayerHasResource(player, resIndex)
     return false;
 end
 
+-- Rule 1 (Gathering Storm / Rise & Fall): Loyalty Pressure from nearby foreign cities
+local function GetPlotLoyaltyPressure(plot)
+    if plot == nil then return 0; end
+    if Map ~= nil and Map.GetContinentPlotsLoyalty ~= nil then
+        local loyaltyTable = Map.GetContinentPlotsLoyalty();
+        if loyaltyTable ~= nil then
+            local val = loyaltyTable[plot:GetIndex()];
+            if val ~= nil and type(val) == "number" then
+                return val;
+            end
+        end
+    end
+    return 0;
+end
+
 function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     local score = 0;
     local px, py = pPlot:GetX(), pPlot:GetY();
     local reasons = {};
     local waterTag = "ไม่มีน้ำ (2 Housing)";
 
-    -- 1. Water & Housing
+    -- 0. Loyalty Pressure Check (Strictly forbid settling if loyalty pressure is critically negative)
+    local loyaltyVal = GetPlotLoyaltyPressure(pPlot);
+    if loyaltyVal <= -10 then
+        -- Critical loyalty pressure! City will rebel into a Free City rapidly. Strictly FORBIDDEN!
+        return -9999, waterTag, {string.format("แรงกดดัน Loyalty วิกฤต (%d/เทิร์น) เสี่ยงเมืองแตกเป็น Free City", loyaltyVal)};
+    elseif loyaltyVal < 0 then
+        -- Moderate loyalty pressure: penalize score heavily (-2.5 per negative loyalty point)
+        score = score + (loyaltyVal * 2.5);
+        table.insert(reasons, string.format("แรงกดดัน Loyalty (%d/เทิร์น)", loyaltyVal));
+    end
+
+    -- 1. Water & Housing (Heavily weighted over distance: Fresh Water +32 vs No Water -25)
     if pPlot:IsFreshWater() then
-        score = score + 26;
+        score = score + 32;
         waterTag = "น้ำจืด (+3 Housing)";
-        table.insert(reasons, "แหล่งน้ำจืด");
+        table.insert(reasons, "แหล่งน้ำจืด (Housing 5)");
     elseif pPlot:IsCoastalLand() then
-        score = score + 12;
+        score = score + 14;
         waterTag = "ชายฝั่ง (+1 Housing)";
-        table.insert(reasons, "ติดชายฝั่ง");
+        table.insert(reasons, "ติดชายฝั่ง (Housing 3)");
+    else
+        score = score - 25;
+        waterTag = "ไม่มีน้ำ (2 Housing)";
+        table.insert(reasons, "แล้งน้ำ (-25 Housing วิกฤต)");
     end
 
     -- 2. City Center Tile Quality
@@ -790,8 +820,12 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
             score = score - 10;
             table.insert(reasons, string.format("ระยะห่างเมืองเดิม %d ช่อง (-10)", minCityDist));
             if hasNewResource then
-                score = score + 20; -- Exception: +20 compensation for claiming new resource far away
-                table.insert(reasons, "เคลมแร่ใหม่ชดเชยระยะไกล (+20): " .. table.concat(newResNames, ", "));
+                if loyaltyVal >= -5 then
+                    score = score + 20; -- Exception: +20 compensation for claiming new resource far away
+                    table.insert(reasons, "เคลมแร่ใหม่ชดเชยระยะไกล (+20): " .. table.concat(newResNames, ", "));
+                else
+                    table.insert(reasons, "เคลมแร่ใหม่แต่ติด Loyalty เสี่ยง (งดบวกชดเชย)");
+                end
             end
         end
     end
@@ -837,7 +871,41 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
     end
 
     local candidates = {};
-    local searchPlots = GetPlotsWithinXTiles(settlerX, settlerY, 6);
+    local searchPlots = {};
+    local pCities = pPlayer:GetCities();
+    local cityCount = pCities and pCities:GetCount() or 0;
+
+    if cityCount >= 1 then
+        -- Anchor candidate scan to existing friendly City Centers (rings 4 to 7)
+        local seenPlots = {};
+        for _, city in pCities:Members() do
+            local cx, cy = city:GetX(), city:GetY();
+            local cityPlots = GetPlotsWithinXTiles(cx, cy, 7);
+            for _, cp in ipairs(cityPlots) do
+                local d = Map.GetPlotDistance(cx, cy, cp:GetX(), cp:GetY());
+                if d >= 4 and d <= 7 then
+                    local idx = cp:GetIndex();
+                    if not seenPlots[idx] then
+                        seenPlots[idx] = true;
+                        table.insert(searchPlots, cp);
+                    end
+                end
+            end
+        end
+        -- Also include plots within 4 tiles of the Settler unit to cover its immediate surroundings
+        local settlerSurroundings = GetPlotsWithinXTiles(settlerX, settlerY, 4);
+        for _, sp in ipairs(settlerSurroundings) do
+            local idx = sp:GetIndex();
+            if not seenPlots[idx] then
+                seenPlots[idx] = true;
+                table.insert(searchPlots, sp);
+            end
+        end
+    else
+        -- First city (turn 1): scan radius 5 around the Settler unit
+        searchPlots = GetPlotsWithinXTiles(settlerX, settlerY, 5);
+    end
+
     for plotIdx, _ in pairs(grandAIPlots) do
         local aiPlot = Map.GetPlotByIndex(plotIdx);
         if aiPlot ~= nil then table.insert(searchPlots, aiPlot); end
@@ -850,12 +918,14 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
             visited[pIdx] = true;
             if IsValidCitySettlePlot(playerID, plot) then
                 local score, waterTag, reasons = ScoreSettlerPlot(playerID, plot, settlerX, settlerY, grandAIPlots);
-                table.insert(candidates, {
-                    Plot = plot,
-                    Score = score,
-                    WaterTag = waterTag,
-                    Reasons = reasons
-                });
+                if score > -9000 then
+                    table.insert(candidates, {
+                        Plot = plot,
+                        Score = score,
+                        WaterTag = waterTag,
+                        Reasons = reasons
+                    });
+                end
             end
         end
     end
