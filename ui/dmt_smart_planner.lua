@@ -850,7 +850,38 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
     end
 end
 
-function OptimizeCityDistricts(playerID, cityX, cityY)
+local function GetFallbackCityName(playerID, cityIndex)
+    local playerConfig = PlayerConfigurations[playerID];
+    if playerConfig then
+        local civTypeName = playerConfig:GetCivilizationTypeName();
+        if civTypeName and GameInfo.CityNames then
+            local count = 0;
+            local targetIdx = cityIndex or 1;
+            for row in GameInfo.CityNames() do
+                if row.CivilizationType == civTypeName then
+                    count = count + 1;
+                    if count == targetIdx then
+                        local n = Locale.Lookup(row.CityName);
+                        if n and n ~= "" then return n; end
+                    end
+                end
+            end
+        end
+        local civDesc = playerConfig:GetCivilizationDescription();
+        if civDesc then
+            local cd = Locale.Lookup(civDesc);
+            if cd and cd ~= "" then return cd; end
+        end
+        local leaderName = playerConfig:GetLeaderName();
+        if leaderName then
+            local ln = Locale.Lookup(leaderName);
+            if ln and ln ~= "" then return ln; end
+        end
+    end
+    return "Capital";
+end
+
+function OptimizeCityDistricts(playerID, cityX, cityY, cityID)
     if playerID ~= Game.GetLocalPlayer() then return; end
     local playerCfg = PlayerConfigurations[playerID];
     if not playerCfg then return; end
@@ -860,27 +891,56 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     EnsureInstanceManagers();
 
     -- Determine City Information (Name, Capital status, CityID)
-    local pCity = CityManager.GetCityAt(cityX, cityY);
-    if pCity == nil and Cities and Cities.GetCityInPlot then
-        pCity = Cities.GetCityInPlot(Map.GetPlot(cityX, cityY));
+    local pCity = nil;
+    if cityID ~= nil and cityID ~= -1 and pPlayer:GetCities() ~= nil then
+        pCity = pPlayer:GetCities():FindID(cityID);
+    end
+    if pCity == nil and CityManager ~= nil and CityManager.GetCity ~= nil and cityID ~= nil and cityID ~= -1 then
+        pCity = CityManager.GetCity(playerID, cityID);
+    end
+    if pCity == nil and CityManager ~= nil and CityManager.GetCityAt ~= nil then
+        pCity = CityManager.GetCityAt(cityX, cityY);
+    end
+    if pCity == nil and Cities ~= nil and Cities.GetCityInPlot ~= nil then
+        pCity = Cities.GetCityInPlot(cityX, cityY);
+    end
+    if pCity == nil and pPlayer:GetCities() ~= nil then
+        for _, city in pPlayer:GetCities():Members() do
+            if city:GetX() == cityX and city:GetY() == cityY then
+                pCity = city;
+                break;
+            end
+        end
+    end
+    if pCity == nil and pPlayer:GetCities() ~= nil then
+        local closestCity = nil;
+        local minDist = 999;
+        for _, city in pPlayer:GetCities():Members() do
+            local d = Map.GetPlotDistance(city:GetX(), city:GetY(), cityX, cityY);
+            if d < minDist then
+                minDist = d;
+                closestCity = city;
+            end
+        end
+        if closestCity ~= nil and minDist <= 1 then
+            pCity = closestCity;
+        end
     end
 
     local isCapital = false;
-    local cityName = "เมือง";
-    local cityID = -1;
+    local cityName = "";
     if pCity ~= nil then
-        cityName = Locale.Lookup(pCity:GetName());
+        local rawName = pCity:GetName();
+        if rawName ~= nil and rawName ~= "" then
+            cityName = Locale.Lookup(rawName);
+        end
         isCapital = pCity:IsCapital();
         cityID = pCity:GetID();
-    else
-        if pPlayer:GetCities() ~= nil then
-            local cap = pPlayer:GetCities():GetCapitalCity();
-            if cap ~= nil and cap:GetX() == cityX and cap:GetY() == cityY then
-                isCapital = true;
-                cityName = Locale.Lookup(cap:GetName());
-                cityID = cap:GetID();
-            end
-        end
+    end
+
+    if cityName == nil or cityName == "" or cityName == "เมือง" then
+        local numCities = (pPlayer:GetCities() and pPlayer:GetCities():GetCount()) or 1;
+        cityName = GetFallbackCityName(playerID, numCities);
     end
 
     print(string.format("DMT Smart Planner: Optimizing districts for [%s] at (%d, %d)", cityName, cityX, cityY));
@@ -1897,7 +1957,7 @@ function OnTriggerSmartPlannerHotkey()
     local pSelectedCity = UI.GetHeadSelectedCity();
     if pSelectedCity ~= nil then
         print("DMT Hotkey: Triggering District Optimization for selected City");
-        OptimizeCityDistricts(playerID, pSelectedCity:GetX(), pSelectedCity:GetY());
+        OptimizeCityDistricts(playerID, pSelectedCity:GetX(), pSelectedCity:GetY(), pSelectedCity:GetID());
         return;
     end
 
@@ -1907,20 +1967,22 @@ function OnTriggerSmartPlannerHotkey()
     if cursorPlot ~= nil then
         if cursorPlot:IsCity() then
             print("DMT Hotkey: Triggering District Optimization for city under cursor");
-            OptimizeCityDistricts(playerID, cursorX, cursorY);
+            local cityUnderCursor = CityManager.GetCityAt(cursorX, cursorY);
+            local cId = cityUnderCursor and cityUnderCursor:GetID() or -1;
+            OptimizeCityDistricts(playerID, cursorX, cursorY, cId);
             return;
         end
         local owningCity = (Cities and Cities.GetPlotPurchaseCity) and Cities.GetPlotPurchaseCity(cursorPlot) or nil;
         if owningCity ~= nil and owningCity:GetOwner() == playerID then
             print("DMT Hotkey: Triggering District Optimization for owning city: " .. Locale.Lookup(owningCity:GetName()));
             UI.SelectCity(owningCity);
-            OptimizeCityDistricts(playerID, owningCity:GetX(), owningCity:GetY());
+            OptimizeCityDistricts(playerID, owningCity:GetX(), owningCity:GetY(), owningCity:GetID());
             return;
         end
         local cityAt = CityManager.GetCityAt(cursorX, cursorY);
         if cityAt ~= nil and cityAt:GetOwner() == playerID then
             print("DMT Hotkey: Triggering District Optimization for city at cursor plot");
-            OptimizeCityDistricts(playerID, cityAt:GetX(), cityAt:GetY());
+            OptimizeCityDistricts(playerID, cityAt:GetX(), cityAt:GetY(), cityAt:GetID());
             return;
         end
     end
@@ -1948,14 +2010,14 @@ function OnTriggerSmartPlannerHotkey()
             print("DMT Hotkey: Fallback to Capital City District Optimization");
             UI.SelectCity(capital);
             UI.LookAtPlot(capital:GetX(), capital:GetY());
-            OptimizeCityDistricts(playerID, capital:GetX(), capital:GetY());
+            OptimizeCityDistricts(playerID, capital:GetX(), capital:GetY(), capital:GetID());
             return;
         end
         for i, city in pCities:Members() do
             print("DMT Hotkey: Fallback to City District Optimization");
             UI.SelectCity(city);
             UI.LookAtPlot(city:GetX(), city:GetY());
-            OptimizeCityDistricts(playerID, city:GetX(), city:GetY());
+            OptimizeCityDistricts(playerID, city:GetX(), city:GetY(), city:GetID());
             return;
         end
     end
@@ -2013,7 +2075,27 @@ end
 
 function DMT_OnCityAddedToMap(ownerPlayerID, cityID, cityX, cityY)
     if ownerPlayerID ~= Game.GetLocalPlayer() then return; end
-    OptimizeCityDistricts(ownerPlayerID, cityX, cityY);
+    OptimizeCityDistricts(ownerPlayerID, cityX, cityY, cityID);
+end
+
+function DMT_OnCityInitialized(playerID, cityID)
+    if playerID ~= Game.GetLocalPlayer() then return; end
+    local pPlayer = Players[playerID];
+    if not pPlayer or not pPlayer:GetCities() then return; end
+    local pCity = pPlayer:GetCities():FindID(cityID);
+    if pCity ~= nil then
+        OptimizeCityDistricts(playerID, pCity:GetX(), pCity:GetY(), cityID);
+    end
+end
+
+function DMT_OnCityNameChanged(playerID, cityID)
+    if playerID ~= Game.GetLocalPlayer() then return; end
+    local pPlayer = Players[playerID];
+    if not pPlayer or not pPlayer:GetCities() then return; end
+    local pCity = pPlayer:GetCities():FindID(cityID);
+    if pCity ~= nil then
+        OptimizeCityDistricts(playerID, pCity:GetX(), pCity:GetY(), cityID);
+    end
 end
 
 -- =======================================================================
@@ -2070,6 +2152,12 @@ function DMT_SmartPlanner_Initialize()
     Events.UnitSelectionChanged.Add(DMT_OnUnitSelectionChanged);
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
+    if Events.CityInitialized ~= nil then
+        Events.CityInitialized.Add(DMT_OnCityInitialized);
+    end
+    if Events.CityNameChanged ~= nil then
+        Events.CityNameChanged.Add(DMT_OnCityNameChanged);
+    end
 
     -- Turn-by-Turn Dynamic Border & District Validation
     Events.LocalPlayerTurnBegin.Add(DMT_OnLocalPlayerTurnBegin);
