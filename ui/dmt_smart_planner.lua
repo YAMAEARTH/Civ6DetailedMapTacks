@@ -72,7 +72,7 @@ local function HasManualPinAtPlot(playerCfg, px, py)
         if not m_AutoSettlerPins[key] and not m_AutoDistrictPins[key] then
             local name = existing:GetName() or "";
             -- Protect user manual pins while not blocking auto-settler or auto-district pins
-            if not name:match("^#%d.*ตั้งเมือง") and not name:match("^%[เมือง") then
+            if not name:match("^#%d.*ตั้งเมือง") and not name:match("^%[.-%]%s*#%d") and not name:match("^%[เมือง") then
                 return true;
             end
         end
@@ -224,6 +224,151 @@ local function IsValidCanalPosition(playerID, px, py, cityX, cityY)
         end
     end
     return waterOrCityCount >= 2;
+end
+
+-- Specialty vs Non-Specialty Districts (Pop Cap distinction)
+local NON_SPECIALTY_DISTRICTS = {
+    DISTRICT_AQUEDUCT = true,
+    DISTRICT_BATH = true,
+    DISTRICT_DAM = true,
+    DISTRICT_CANAL = true,
+    DISTRICT_NEIGHBORHOOD = true,
+    DISTRICT_MBANZA = true,
+    DISTRICT_AERODROME = true,
+    DISTRICT_SPACEPORT = true
+};
+
+local function IsSpecialtyDistrict(districtType, baseDistrictType)
+    if (districtType and NON_SPECIALTY_DISTRICTS[districtType]) or (baseDistrictType and NON_SPECIALTY_DISTRICTS[baseDistrictType]) then
+        return false;
+    end
+    return true;
+end
+
+-- Rule 2: Resource Tile Restrictions (Strictly forbid Luxury & Revealed Strategic resources)
+local function HasForbiddenResourceForDistrict(playerID, plot)
+    if plot == nil then return false; end
+    local rIdx = plot:GetResourceType();
+    if rIdx == -1 then return false; end
+    local rInfo = GameInfo.Resources[rIdx];
+    if rInfo == nil then return false; end
+
+    -- 1. Luxury Resources can NEVER be crushed by districts in Civ 6
+    if rInfo.ResourceClassType == "RESOURCECLASS_LUXURY" then
+        return true;
+    end
+
+    -- 2. Strategic Resources revealed by player's researched tech can NEVER be crushed
+    if rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+        local pPlayer = Players[playerID];
+        if pPlayer and pPlayer:GetResources() then
+            if pPlayer:GetResources():IsResourceVisible(rInfo.Hash) then
+                return true;
+            end
+        else
+            return true;
+        end
+    end
+
+    -- 3. Any non-harvestable resource
+    if CanHarvestResource ~= nil and not CanHarvestResource(rInfo.ResourceType) then
+        return true;
+    end
+
+    return false;
+end
+
+-- Rule 1: Dam 1-per-river system check across the whole empire/map
+local function IsDamAlreadyOnRiver(playerID, px, py)
+    if RiverManager == nil then return false; end
+    local riverTypeId = RiverManager.GetRiverForFloodplain(px, py);
+    if riverTypeId == -1 then return false; end
+
+    -- Check all floodplain plots of this river
+    local fpPlots = RiverManager.GetFloodplainPlots(riverTypeId);
+    if fpPlots ~= nil then
+        for _, plotIndex in ipairs(fpPlots) do
+            local p = Map.GetPlotByIndex(plotIndex);
+            if p ~= nil then
+                local dType = p:GetDistrictType();
+                if dType ~= -1 and GameInfo.Districts[dType] ~= nil and GameInfo.Districts[dType].DistrictType == "DISTRICT_DAM" then
+                    return true;
+                end
+                local key = p:GetX() .. "_" .. p:GetY();
+                local pin = m_AutoDistrictPins[key];
+                if pin ~= nil and (pin.DistrictType == "DISTRICT_DAM" or pin.BaseDistrictType == "DISTRICT_DAM") then
+                    return true;
+                end
+            end
+        end
+    end
+
+    -- Check m_AutoDistrictPins for any planned Dam on this river
+    for key, info in pairs(m_AutoDistrictPins) do
+        if type(info) == "table" and (info.DistrictType == "DISTRICT_DAM" or info.BaseDistrictType == "DISTRICT_DAM") then
+            local pX = info.PlotX or info.CityX;
+            local pY = info.PlotY or info.CityY;
+            if pX and pY then
+                local rId = RiverManager.GetRiverForFloodplain(pX, pY);
+                if rId ~= -1 and rId == riverTypeId then
+                    return true;
+                end
+            end
+        end
+    end
+
+    return false;
+end
+
+-- Rule 4: Vietnam Feature Requirement (Woods / Rainforest / Marsh)
+local function IsValidVietnamFeature(plot)
+    if plot == nil then return false; end
+    local fIdx = plot:GetFeatureType();
+    if fIdx ~= -1 and GameInfo.Features[fIdx] ~= nil then
+        local fType = GameInfo.Features[fIdx].FeatureType;
+        return fType == "FEATURE_FOREST" or fType == "FEATURE_JUNGLE" or fType == "FEATURE_MARSH";
+    end
+    return false;
+end
+
+-- Rule 5: Priority score calculation for sorting build sequence
+local function CalculateDistrictPriority(item, cityHasFreshWater)
+    local baseType = item.BaseDistrictType;
+    local num = item.NumericBonus or 0;
+    local score = 50;
+
+    if baseType == "DISTRICT_CAMPUS" then
+        score = 92 + num * 4;
+    elseif baseType == "DISTRICT_COMMERCIAL_HUB" or baseType == "DISTRICT_HARBOR" then
+        score = 88 + num * 3;
+    elseif baseType == "DISTRICT_HOLY_SITE" then
+        score = 86 + num * 3;
+    elseif baseType == "DISTRICT_AQUEDUCT" then
+        score = not cityHasFreshWater and 87 or 74;
+    elseif baseType == "DISTRICT_INDUSTRIAL_ZONE" then
+        score = 85 + num * 3;
+    elseif baseType == "DISTRICT_GOVERNMENT" then
+        score = 82;
+    elseif baseType == "DISTRICT_DAM" then
+        score = 78;
+    elseif baseType == "DISTRICT_ENCAMPMENT" then
+        score = 72;
+    elseif baseType == "DISTRICT_ENTERTAINMENT_COMPLEX" then
+        score = 70;
+    elseif baseType == "DISTRICT_THEATER" then
+        score = 68 + num * 2;
+    elseif baseType == "DISTRICT_DIPLOMATIC_QUARTER" then
+        score = 65;
+    elseif baseType == "DISTRICT_CANAL" then
+        score = 55;
+    elseif baseType == "DISTRICT_NEIGHBORHOOD" then
+        score = 45;
+    elseif baseType == "DISTRICT_AERODROME" then
+        score = 30;
+    elseif baseType == "DISTRICT_SPACEPORT" then
+        score = 20;
+    end
+    return score;
 end
 
 -- =======================================================================
@@ -573,7 +718,8 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
             local px, py = pin:GetHexX(), pin:GetHexY();
             local key = px .. "_" .. py;
             local pinName = pin:GetName() or "";
-            if cityPlotSet[key] and (m_AutoDistrictPins[key] ~= nil or pinName:match("^%[เมือง")) then
+            local isAutoPin = (m_AutoDistrictPins[key] ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
+            if cityPlotSet[key] and isAutoPin then
                 LuaEvents.DMT_MapPinRemoved(pin);
                 playerCfg:DeleteMapPin(pinID);
                 m_AutoDistrictPins[key] = nil;
@@ -621,8 +767,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    local cityPrefix = isCapital and ("เมืองหลัก: " .. cityName) or ("เมืองรอง: " .. cityName);
-    print(string.format("DMT Smart Planner: Optimizing districts for [%s] at (%d, %d)", cityPrefix, cityX, cityY));
+    print(string.format("DMT Smart Planner: Optimizing districts for [%s] at (%d, %d)", cityName, cityX, cityY));
 
     ClearAutoSettlerPins(playerID);
     if Controls.SettlerRecommendationPanel then
@@ -631,6 +776,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
 
     ClearAutoDistrictsForCity(playerID, cityX, cityY);
 
+    -- Rule 3: Enforce Workable Range (1 - 3 tiles strictly)
     local allCityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
     local candidatePlots = {};
     local occupiedPlots = {};
@@ -641,12 +787,16 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         local pIdx = plot:GetIndex();
         local px, py = plot:GetX(), plot:GetY();
 
+        local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+        local isOutOfRange = (distFromCity < 1 or distFromCity > 3);
         local hasExistingDistrict = plot:GetDistrictType() ~= -1 or plot:IsCity();
         local isForeignOwned = plot:IsOwned() and plot:GetOwner() ~= playerID;
         local isImpassable = plot:IsImpassable() or not IsPlotVisibleOrRevealed(plot, playerID);
         local hasManualPin = HasManualPinAtPlot(playerCfg, px, py);
+        -- Rule 2: Exclude Luxury Resources & Revealed Strategic Resources
+        local hasForbiddenRes = HasForbiddenResourceForDistrict(playerID, plot);
 
-        if hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin then
+        if isOutOfRange or hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin or hasForbiddenRes then
             occupiedPlots[pIdx] = true;
         else
             table.insert(candidatePlots, plot);
@@ -670,25 +820,48 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     local distAerodrome     = GetPlayerUniqueDistrict(playerID, "DISTRICT_AERODROME");
     local distSpaceport     = GetPlayerUniqueDistrict(playerID, "DISTRICT_SPACEPORT");
 
+    -- Rule 4: Civilization and Unique District Detection
+    local playerConfig = PlayerConfigurations[playerID];
+    local civType = playerConfig and playerConfig:GetCivilizationTypeName() or "";
+    local isVietnam = (civType == "CIVILIZATION_VIETNAM" or distEncampment == "DISTRICT_THANH");
+    local isKorea = (civType == "CIVILIZATION_KOREA" or distCampus == "DISTRICT_SEOWON");
+    local isGaul = (civType == "CIVILIZATION_GAUL" or distIZ == "DISTRICT_OPPIDUM");
+    local isKongo = (civType == "CIVILIZATION_KONGO" or distNeighborhood == "DISTRICT_MBANZA");
+    local isGermany = (civType == "CIVILIZATION_GERMANY" or distIZ == "DISTRICT_HANSA");
+
     local plannedDistricts = {};
     local assignedPlots = {};
+    local bestCampus = nil;
 
-    local function IsPlotAvailable(plot)
-        return plot ~= nil and not occupiedPlots[plot:GetIndex()] and not assignedPlots[plot:GetIndex()];
+    local function IsPlotAvailable(plot, isWaterCheck)
+        if plot == nil or occupiedPlots[plot:GetIndex()] or assignedPlots[plot:GetIndex()] then
+            return false;
+        end
+        -- Korea rule: No district may touch Seowon (to avoid -1 Science penalty)
+        if isKorea and bestCampus ~= nil then
+            if Map.GetPlotDistance(plot:GetX(), plot:GetY(), bestCampus:GetX(), bestCampus:GetY()) <= 1 then
+                return false;
+            end
+        end
+        -- Vietnam rule: Land specialty districts must be on Woods, Rainforest, or Marsh
+        if isVietnam and not isWaterCheck and not IsValidVietnamFeature(plot) then
+            return false;
+        end
+        return true;
     end
 
-    -- Step A: Aqueduct
+    -- Step A: Aqueduct (Non-specialty)
     local bestAqueduct = nil;
     if GameInfo.Districts[distAqueduct] ~= nil then
         local bestAqueductScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
                 if IsValidAqueductPosition(playerID, px, py) then
                     local score = 10;
                     local adjPlots = Map.GetAdjacentPlots(px, py);
                     for _, adj in pairs(adjPlots) do
-                        if IsPlotAvailable(adj) and not adj:IsWater() and not adj:IsMountain() then
+                        if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
                             score = score + 5;
                         end
                     end
@@ -706,18 +879,20 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distAqueduct,
                 BaseDistrictType = "DISTRICT_AQUEDUCT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distAqueduct].Name),
-                YieldBonus = "+2 Housing & Water"
+                YieldBonus = "+2 Housing & Water",
+                NumericBonus = 2,
+                IsSpecialty = false
             });
         end
     end
 
-    -- Step B: Dam
+    -- Step B: Dam (Non-specialty) - Rule 1: 1 Dam per River System across the map!
     local bestDam = nil;
     if GameInfo.Districts[distDam] ~= nil then
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
-                if IsValidDamPosition(playerID, px, py) then
+                if not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
                     bestDam = plot;
                     assignedPlots[plot:GetIndex()] = true;
                     table.insert(plannedDistricts, {
@@ -725,7 +900,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                         DistrictType = distDam,
                         BaseDistrictType = "DISTRICT_DAM",
                         BaseName = Locale.Lookup(GameInfo.Districts[distDam].Name),
-                        YieldBonus = "+3 Housing & Power"
+                        YieldBonus = "+3 Housing & Power",
+                        NumericBonus = 3,
+                        IsSpecialty = false
                     });
                     break;
                 end
@@ -733,12 +910,12 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    -- Step C: Canal
+    -- Step C: Canal (Non-specialty)
     local bestCanal = nil;
     if GameInfo.Districts[distCanal] ~= nil then
         local bestCanalScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
                 local px, py = plot:GetX(), plot:GetY();
                 if IsValidCanalPosition(playerID, px, py, cityX, cityY) then
                     local pinSub = { X = px, Y = py, Key = distCanal, Type = MAP_PIN_TYPES.DISTRICT };
@@ -746,7 +923,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                         local cScore = 5;
                         local adjPlots = Map.GetAdjacentPlots(px, py);
                         for _, adj in pairs(adjPlots) do
-                            if IsPlotAvailable(adj) and not adj:IsWater() and not adj:IsMountain() then
+                            if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
                                 cScore = cScore + 2;
                             end
                         end
@@ -765,18 +942,23 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distCanal,
                 BaseDistrictType = "DISTRICT_CANAL",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCanal].Name),
-                YieldBonus = "+2 [ICON_Production] to IZ"
+                YieldBonus = "+2 [ICON_Production] to IZ",
+                NumericBonus = 2,
+                IsSpecialty = false
             });
         end
     end
 
-    -- Step D: Industrial Zone
+    -- Step D: Industrial Zone (Specialty) - Rule 4: Gaul Oppidum cannot be adjacent to City Center!
     local bestIZ = nil;
     if GameInfo.Districts[distIZ] ~= nil then
         local bestIZScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
-                local px, py = plot:GetX(), plot:GetY();
+            local px, py = plot:GetX(), plot:GetY();
+            local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+            local bGaulValid = (not isGaul) or (distFromCity >= 2);
+
+            if bGaulValid and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distIZ, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local izScore = 0;
@@ -815,17 +997,19 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distIZ,
                 BaseDistrictType = "DISTRICT_INDUSTRIAL_ZONE",
                 BaseName = Locale.Lookup(GameInfo.Districts[distIZ].Name),
-                YieldBonus = "+" .. izBonus .. " [ICON_Production] Prod"
+                YieldBonus = "+" .. izBonus .. " [ICON_Production] Prod",
+                NumericBonus = izBonus,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step E: Harbor
+    -- Step E: Harbor (Specialty)
     local bestHarbor = nil;
     if GameInfo.Districts[distHarbor] ~= nil then
         local bestHarborScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and plot:IsWater() then
+            if IsPlotAvailable(plot, true) and plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distHarbor, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
@@ -854,17 +1038,19 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distHarbor,
                 BaseDistrictType = "DISTRICT_HARBOR",
                 BaseName = Locale.Lookup(GameInfo.Districts[distHarbor].Name),
-                YieldBonus = "+" .. hBonus .. " [ICON_Gold] Gold"
+                YieldBonus = "+" .. hBonus .. " [ICON_Gold] Gold",
+                NumericBonus = hBonus,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step F: Commercial Hub
+    -- Step F: Commercial Hub (Specialty)
     local bestCommHub = nil;
     if GameInfo.Districts[distCommHub] ~= nil then
         local bestCHScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distCommHub, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
@@ -894,38 +1080,60 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distCommHub,
                 BaseDistrictType = "DISTRICT_COMMERCIAL_HUB",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCommHub].Name),
-                YieldBonus = "+" .. chBonus .. " [ICON_Gold] Gold"
+                YieldBonus = "+" .. chBonus .. " [ICON_Gold] Gold",
+                NumericBonus = chBonus,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step G: Campus
-    local bestCampus = nil;
+    -- Step G: Campus (Specialty) - Rule 4: Korea Seowon on Hills & isolated from districts!
     if GameInfo.Districts[distCampus] ~= nil then
         local bestCampusScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
-                local px, py = plot:GetX(), plot:GetY();
+            local px, py = plot:GetX(), plot:GetY();
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distCampus, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
-                    local cScore = 0;
-                    local adjPlots = Map.GetAdjacentPlots(px, py);
-                    for _, adj in pairs(adjPlots) do
-                        if adj:IsMountain() then cScore = cScore + 1; end
-                        local feat = adj:GetFeatureType();
-                        if feat ~= -1 and GameInfo.Features[feat] then
-                            local fType = GameInfo.Features[feat].FeatureType;
-                            if fType == "FEATURE_GEOTHERMAL_FISSURE" or fType == "FEATURE_REEF" then
-                                cScore = cScore + 2;
-                            elseif fType == "FEATURE_JUNGLE" then
-                                cScore = cScore + 0.5;
+                    if isKorea then
+                        -- Seowon: must be on Hills and NOT adjacent to City Center or other districts
+                        if plot:IsHills() and Map.GetPlotDistance(cityX, cityY, px, py) >= 2 then
+                            local touchesDistrict = false;
+                            local adjPlots = Map.GetAdjacentPlots(px, py);
+                            for _, adj in pairs(adjPlots) do
+                                if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) then
+                                    touchesDistrict = true;
+                                    break;
+                                end
+                            end
+                            if not touchesDistrict then
+                                local cScore = 4; -- Base Seowon +4 Science
+                                if cScore > bestCampusScore then
+                                    bestCampusScore = cScore;
+                                    bestCampus = plot;
+                                end
                             end
                         end
-                        if assignedPlots[adj:GetIndex()] then cScore = cScore + 0.5; end
-                    end
-                    if cScore > bestCampusScore then
-                        bestCampusScore = cScore;
-                        bestCampus = plot;
+                    else
+                        local cScore = 0;
+                        local adjPlots = Map.GetAdjacentPlots(px, py);
+                        for _, adj in pairs(adjPlots) do
+                            if adj:IsMountain() then cScore = cScore + 1; end
+                            local feat = adj:GetFeatureType();
+                            if feat ~= -1 and GameInfo.Features[feat] then
+                                local fType = GameInfo.Features[feat].FeatureType;
+                                if fType == "FEATURE_GEOTHERMAL_FISSURE" or fType == "FEATURE_REEF" then
+                                    cScore = cScore + 2;
+                                elseif fType == "FEATURE_JUNGLE" then
+                                    cScore = cScore + 0.5;
+                                end
+                            end
+                            if assignedPlots[adj:GetIndex()] then cScore = cScore + 0.5; end
+                        end
+                        if cScore > bestCampusScore then
+                            bestCampusScore = cScore;
+                            bestCampus = plot;
+                        end
                     end
                 end
             end
@@ -938,17 +1146,19 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distCampus,
                 BaseDistrictType = "DISTRICT_CAMPUS",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCampus].Name),
-                YieldBonus = "+" .. cBonus .. " [ICON_Science] Sci"
+                YieldBonus = "+" .. cBonus .. " [ICON_Science] Sci",
+                NumericBonus = cBonus,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step H: Holy Site
+    -- Step H: Holy Site (Specialty)
     local bestHolySite = nil;
     if GameInfo.Districts[distHolySite] ~= nil then
         local bestHSScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distHolySite, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
@@ -981,24 +1191,26 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distHolySite,
                 BaseDistrictType = "DISTRICT_HOLY_SITE",
                 BaseName = Locale.Lookup(GameInfo.Districts[distHolySite].Name),
-                YieldBonus = "+" .. hsBonus .. " [ICON_Faith] Faith"
+                YieldBonus = "+" .. hsBonus .. " [ICON_Faith] Faith",
+                NumericBonus = hsBonus,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step I: Entertainment Complex
+    -- Step I: Entertainment Complex (Specialty)
     local bestEntertainment = nil;
     if GameInfo.Districts[distEntertainment] ~= nil then
         local bestECScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distEntertainment, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local ecScore = 1;
                     local adjPlots = Map.GetAdjacentPlots(px, py);
                     for _, adj in pairs(adjPlots) do
-                        if IsPlotAvailable(adj) and not adj:IsWater() and not adj:IsMountain() then
+                        if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
                             ecScore = ecScore + 2; -- Potential Theater Square neighbor
                         end
                         if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) then
@@ -1019,17 +1231,19 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distEntertainment,
                 BaseDistrictType = "DISTRICT_ENTERTAINMENT_COMPLEX",
                 BaseName = Locale.Lookup(GameInfo.Districts[distEntertainment].Name),
-                YieldBonus = "+1 Amenity & +2 [ICON_Culture] TS"
+                YieldBonus = "+1 Amenity & +2 [ICON_Culture] TS",
+                NumericBonus = 2,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step J: Theater Square
+    -- Step J: Theater Square (Specialty)
     local bestTheater = nil;
     if GameInfo.Districts[distTheater] ~= nil then
         local bestTSScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distTheater, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
@@ -1062,17 +1276,19 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distTheater,
                 BaseDistrictType = "DISTRICT_THEATER",
                 BaseName = Locale.Lookup(GameInfo.Districts[distTheater].Name),
-                YieldBonus = "+" .. tsBonus .. " [ICON_Culture] Cul"
+                YieldBonus = "+" .. tsBonus .. " [ICON_Culture] Cul",
+                NumericBonus = tsBonus,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step K: Government Plaza (1 per empire)
+    -- Step K: Government Plaza (Specialty, 1 per empire)
     if GameInfo.Districts[distGovPlaza] ~= nil and not HasEmpireGovernmentPlaza(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_GOVERNMENT") then
         local bestGov = nil;
         local bestGovScore = 1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distGovPlaza, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
@@ -1097,17 +1313,19 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distGovPlaza,
                 BaseDistrictType = "DISTRICT_GOVERNMENT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distGovPlaza].Name),
-                YieldBonus = "+" .. bestGovScore .. " All Adj & Loyalty"
+                YieldBonus = "+" .. bestGovScore .. " All Adj & Loyalty",
+                NumericBonus = bestGovScore,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step L: Diplomatic Quarter (1 per empire)
+    -- Step L: Diplomatic Quarter (Specialty, 1 per empire)
     if GameInfo.Districts[distDiploQuarter] ~= nil and not HasEmpireDiplomaticQuarter(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_DIPLOMATIC_QUARTER") then
         local bestDiplo = nil;
         local bestDiploScore = 0;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distDiploQuarter, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
@@ -1132,19 +1350,21 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distDiploQuarter,
                 BaseDistrictType = "DISTRICT_DIPLOMATIC_QUARTER",
                 BaseName = Locale.Lookup(GameInfo.Districts[distDiploQuarter].Name),
-                YieldBonus = "+1 Envoy & +Adj"
+                YieldBonus = "+1 Envoy & +Adj",
+                NumericBonus = 1,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step M: Encampment (Cannot be adjacent to City Center: dist >= 2)
+    -- Step M: Encampment (Specialty) - Rule 3 & 4: dist >= 2 and dist <= 3
     local bestEncampment = nil;
     if GameInfo.Districts[distEncampment] ~= nil then
         local bestEncScore = -1;
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
-            if distFromCity >= 2 and IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distEncampment, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local encScore = 2;
@@ -1171,59 +1391,79 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distEncampment,
                 BaseDistrictType = "DISTRICT_ENCAMPMENT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distEncampment].Name),
-                YieldBonus = "+2 [ICON_Production] & Defense"
+                YieldBonus = "+2 [ICON_Production] & Defense",
+                NumericBonus = 2,
+                IsSpecialty = true
             });
         end
     end
 
-    -- Step N: Neighborhood (Scales with Plot Appeal)
+    -- Step N: Neighborhood (Non-specialty) - Rule 4: Kongo Mbanza on Woods/Rainforest, ignores Appeal!
     local bestNeighborhood = nil;
     if GameInfo.Districts[distNeighborhood] ~= nil then
         local bestNScore = -999;
         local bestAppeal = 0;
         local bestHousing = 4;
+        local bIsMbanza = (isKongo or distNeighborhood == "DISTRICT_MBANZA");
+
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distNeighborhood, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
-                    local appeal = plot:GetAppeal();
-                    local housing = 4;
-                    if appeal >= 4 then housing = 6;
-                    elseif appeal >= 2 then housing = 5;
-                    elseif appeal >= -1 then housing = 4;
-                    else housing = 3; end
+                    if bIsMbanza then
+                        -- Kongo: Mbanza requires Woods or Rainforest, ignores Appeal
+                        local fIdx = plot:GetFeatureType();
+                        if fIdx ~= -1 and GameInfo.Features[fIdx] ~= nil then
+                            local fType = GameInfo.Features[fIdx].FeatureType;
+                            if fType == "FEATURE_FOREST" or fType == "FEATURE_JUNGLE" then
+                                bestNeighborhood = plot;
+                                bestHousing = 5;
+                                break;
+                            end
+                        end
+                    else
+                        local appeal = plot:GetAppeal();
+                        local housing = 4;
+                        if appeal >= 4 then housing = 6;
+                        elseif appeal >= 2 then housing = 5;
+                        elseif appeal >= -1 then housing = 4;
+                        else housing = 3; end
 
-                    local nScore = (appeal * 3) + housing;
-                    if nScore > bestNScore then
-                        bestNScore = nScore;
-                        bestAppeal = appeal;
-                        bestHousing = housing;
-                        bestNeighborhood = plot;
+                        local nScore = (appeal * 3) + housing;
+                        if nScore > bestNScore then
+                            bestNScore = nScore;
+                            bestAppeal = appeal;
+                            bestHousing = housing;
+                            bestNeighborhood = plot;
+                        end
                     end
                 end
             end
         end
         if bestNeighborhood ~= nil then
             assignedPlots[bestNeighborhood:GetIndex()] = true;
+            local yieldText = bIsMbanza and "+5 Housing & Food/Gold" or string.format("+%d Housing (Appeal %d)", bestHousing, bestAppeal);
             table.insert(plannedDistricts, {
                 Plot = bestNeighborhood,
                 DistrictType = distNeighborhood,
                 BaseDistrictType = "DISTRICT_NEIGHBORHOOD",
                 BaseName = Locale.Lookup(GameInfo.Districts[distNeighborhood].Name),
-                YieldBonus = string.format("+%d Housing (Appeal %d)", bestHousing, bestAppeal)
+                YieldBonus = yieldText,
+                NumericBonus = bestHousing,
+                IsSpecialty = false
             });
         end
     end
 
-    -- Step O: Aerodrome (Flat land only)
+    -- Step O: Aerodrome (Non-specialty, flat land only)
     local bestAerodrome = nil;
     if GameInfo.Districts[distAerodrome] ~= nil then
         local bestAeroScore = -1;
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
-            if distFromCity >= 2 and IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
+            if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
                 local pinSub = { X = px, Y = py, Key = distAerodrome, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local aeroScore = (distFromCity == 3) and 6 or 4;
@@ -1241,19 +1481,21 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distAerodrome,
                 BaseDistrictType = "DISTRICT_AERODROME",
                 BaseName = Locale.Lookup(GameInfo.Districts[distAerodrome].Name),
-                YieldBonus = "+4 Air Slots & [ICON_Production] Air"
+                YieldBonus = "+4 Air Slots & [ICON_Production] Air",
+                NumericBonus = 4,
+                IsSpecialty = false
             });
         end
     end
 
-    -- Step P: Spaceport (Flat land only)
+    -- Step P: Spaceport (Non-specialty, flat land only)
     local bestSpaceport = nil;
     if GameInfo.Districts[distSpaceport] ~= nil then
         local bestSpaceScore = -1;
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
-            if distFromCity >= 2 and IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
+            if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
                 local pinSub = { X = px, Y = py, Key = distSpaceport, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local spaceScore = (distFromCity == 3) and 6 or 4;
@@ -1271,8 +1513,39 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 DistrictType = distSpaceport,
                 BaseDistrictType = "DISTRICT_SPACEPORT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distSpaceport].Name),
-                YieldBonus = "Science Victory Projects"
+                YieldBonus = "Science Victory Projects",
+                NumericBonus = 5,
+                IsSpecialty = false
             });
+        end
+    end
+
+    -- Rule 5: Priority Ranking & Population Cap Assignment
+    local cityPlot = Map.GetPlot(cityX, cityY);
+    local cityHasFreshWater = cityPlot and cityPlot:IsFreshWater();
+
+    for _, item in ipairs(plannedDistricts) do
+        item.PriorityScore = CalculateDistrictPriority(item, cityHasFreshWater);
+    end
+
+    table.sort(plannedDistricts, function(a, b)
+        return a.PriorityScore > b.PriorityScore;
+    end);
+
+    local specialtyCount = 0;
+    for rank, item in ipairs(plannedDistricts) do
+        item.Rank = rank;
+        if item.IsSpecialty then
+            specialtyCount = specialtyCount + 1;
+            local reqPop = 1 + (specialtyCount - 1) * 3;
+            if isGermany then
+                reqPop = (specialtyCount == 1) and 1 or (1 + (specialtyCount - 2) * 3);
+            end
+            item.PopReq = reqPop;
+            item.PopReqText = "ต้องการ Pop " .. reqPop;
+        else
+            item.PopReq = 0;
+            item.PopReqText = "ไม่จำกัด Pop";
         end
     end
 
@@ -1284,15 +1557,16 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     local pinsToUpdate = {};
     for _, item in ipairs(plannedDistricts) do
         local px, py = item.Plot:GetX(), item.Plot:GetY();
-        local pinName = string.format("[%s] %s (%s)", cityPrefix, item.BaseName, item.YieldBonus);
+        -- Format: [CityName] #Rank DistrictName (YieldBonus)
+        local pinName = string.format("[%s] #%d %s (%s)", cityName, item.Rank, item.BaseName, item.YieldBonus);
         local iconName = "ICON_" .. item.DistrictType;
 
         -- 1. Populate HUD UI list
         if m_DistrictIM ~= nil then
             local uiEntry = m_DistrictIM:GetInstance();
             uiEntry.DistrictIcon:SetIcon(iconName);
-            uiEntry.DistrictNameLabel:SetText(item.BaseName);
-            uiEntry.DistrictBonusLabel:SetText(item.YieldBonus);
+            uiEntry.DistrictNameLabel:SetText(string.format("#%d %s", item.Rank, item.BaseName));
+            uiEntry.DistrictBonusLabel:SetText(string.format("%s • %s", item.YieldBonus, item.PopReqText));
         end
 
         -- 2. Place Map Pin on World Map
@@ -1309,10 +1583,15 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                     IsCapital = isCapital,
                     CityX = cityX,
                     CityY = cityY,
+                    PlotX = px,
+                    PlotY = py,
                     DistrictType = item.DistrictType,
                     BaseDistrictType = item.BaseDistrictType,
                     BaseName = item.BaseName,
-                    YieldBonus = item.YieldBonus
+                    YieldBonus = item.YieldBonus,
+                    Priority = item.Rank,
+                    IsSpecialty = item.IsSpecialty,
+                    PopReq = item.PopReq
                 };
 
                 local pinSubject = CreateMapPinSubject(pin);
@@ -1339,7 +1618,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     if Controls.CityDistrictPlanPanel then
         Controls.CityDistrictPlanPanel:SetHide(false);
         if Controls.CityNameLabel then
-            Controls.CityNameLabel:SetText(string.format("ผังเขตสำหรับ [%s] (%d เขต):", cityPrefix, #plannedDistricts));
+            Controls.CityNameLabel:SetText(string.format("ผังเขต [%s] (ลำดับสร้าง %d เขต):", cityName, #plannedDistricts));
         end
         if Controls.LookAtCityButton then
             Controls.LookAtCityButton:RegisterCallback(Mouse.eLClick, function()
@@ -1349,7 +1628,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     end
 
     UI.PlaySound("Map_Pin_Add");
-    print(string.format("DMT Smart Planner: Successfully displayed UI and placed %d district pins for [%s]!", #plannedDistricts, cityPrefix));
+    print(string.format("DMT Smart Planner: Successfully displayed UI and placed %d district pins for [%s] with priorities!", #plannedDistricts, cityName));
 end
 
 -- =======================================================================
@@ -1377,7 +1656,7 @@ function ValidateAndRefreshAutoPins(playerID)
         local pinName = pin:GetName() or "";
 
         local autoInfo = m_AutoDistrictPins[key];
-        local isDistrictPin = (autoInfo ~= nil) or pinName:match("^%[เมือง");
+        local isDistrictPin = (autoInfo ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
 
         if isDistrictPin then
             local plot = Map.GetPlot(px, py);
@@ -1399,7 +1678,7 @@ function ValidateAndRefreshAutoPins(playerID)
             local targetCityY = autoInfo and autoInfo.CityY or nil;
 
             if targetCityX == nil or targetCityY == nil then
-                local cName = pinName:match("^%[[^:]+:%s*(.-)%]");
+                local cName = pinName:match("^%[(.-)%]%s*#%d") or pinName:match("^%[[^:]+:%s*(.-)%]");
                 local pPlayer = Players[playerID];
                 if pPlayer and pPlayer:GetCities() then
                     for i, c in pPlayer:GetCities():Members() do
@@ -1436,6 +1715,8 @@ function ValidateAndRefreshAutoPins(playerID)
                     m_AutoDistrictPins[key] = {
                         CityX = targetCityX,
                         CityY = targetCityY,
+                        PlotX = px,
+                        PlotY = py,
                         PinName = pinName
                     };
                 end
