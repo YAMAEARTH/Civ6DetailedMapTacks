@@ -29,6 +29,7 @@ Enhanced edition of **Detailed Map Tacks** for *Sid Meier's Civilization VI* fea
   * *Vietnam (Thành & specialty districts)*: Restricted to Woods/Rainforest/Marsh.
   * *Gaul (Oppidum)*: Placed at least 2 tiles away from City Center.
 * **Population Slot Ranking**: Non-specialty districts (Aqueduct, Dam, Canal, Neighborhood, Spaceport, Gov Plaza, Diplo Quarter) are marked as free ("ไม่จำกัด Pop"), while specialty districts are prioritized according to Pop threshold requirements (Pop 1, 4, 7...).
+* **Recognition of Constructed Districts**: Recognizes already built or in-progress districts and manual pins, preventing duplicate map tacks, factoring their adjacency into remaining districts, and displaying both completed and remaining districts in the HUD.
 * **Turn-by-Turn Dynamic Validation**: Scans every turn. If foreign borders expand over a planned tile or a district is built, the tack is cleaned up and remaining districts are dynamically re-routed.
 
 ---
