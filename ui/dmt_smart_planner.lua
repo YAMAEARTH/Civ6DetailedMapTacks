@@ -207,26 +207,65 @@ local function IsEmpireDistrictAlreadyPlanned(baseDistrictType)
     return false;
 end
 
+-- Rule 3: Canal Valid Geometry & 60-degree bend rule
+-- Flat land, connects 2 water bodies or 1 water + 1 city center, no sharp bend <= 60 deg (endpoints cannot be adjacent)
 local function IsValidCanalPosition(playerID, px, py, cityX, cityY)
     local plot = Map.GetPlot(px, py);
     if plot == nil or plot:IsWater() or plot:IsHills() or plot:IsMountain() then
         return false;
     end
+
     local adjPlots = Map.GetAdjacentPlots(px, py);
-    local waterOrCityCount = 0;
+    local connectables = {};
+
     for _, adj in pairs(adjPlots) do
         if adj ~= nil then
-            if adj:IsWater() and not adj:IsImpassable() then
-                waterOrCityCount = waterOrCityCount + 1;
-            elseif adj:IsCity() or (adj:GetX() == cityX and adj:GetY() == cityY) then
-                waterOrCityCount = waterOrCityCount + 1;
+            local isWater = adj:IsWater() and not adj:IsImpassable();
+            local isCity = adj:IsCity() or (adj:GetX() == cityX and adj:GetY() == cityY);
+            if isWater or isCity then
+                table.insert(connectables, {
+                    Plot = adj,
+                    X = adj:GetX(),
+                    Y = adj:GetY(),
+                    IsWater = isWater,
+                    IsCity = isCity
+                });
             end
         end
     end
-    return waterOrCityCount >= 2;
+
+    -- Must have at least 2 connectable endpoints
+    if #connectables < 2 then
+        return false;
+    end
+
+    -- Find at least one valid pair (A, B)
+    for i = 1, #connectables - 1 do
+        for j = i + 1, #connectables do
+            local a = connectables[i];
+            local b = connectables[j];
+
+            -- Rule 3: Must connect 2 water bodies OR 1 water body + 1 City Center
+            local hasWater = a.IsWater or b.IsWater;
+            local validTypes = (a.IsWater or a.IsCity) and (b.IsWater or b.IsCity);
+
+            if hasWater and validTypes then
+                -- Rule 3: No sharp bend <= 60 degrees (A and B cannot be adjacent to each other)
+                local distBetweenEndpoints = Map.GetPlotDistance(a.X, a.Y, b.X, b.Y);
+                if distBetweenEndpoints >= 2 then
+                    return true;
+                end
+            end
+        end
+    end
+
+    return false;
 end
 
 -- Specialty vs Non-Specialty Districts (Pop Cap distinction)
+-- Government Plaza & Diplomatic Quarter do NOT count toward Pop cap (built for free)
+-- Aerodrome counts toward Pop cap (Specialty District)
+-- Spaceport does NOT count toward Pop cap
 local NON_SPECIALTY_DISTRICTS = {
     DISTRICT_AQUEDUCT = true,
     DISTRICT_BATH = true,
@@ -234,8 +273,9 @@ local NON_SPECIALTY_DISTRICTS = {
     DISTRICT_CANAL = true,
     DISTRICT_NEIGHBORHOOD = true,
     DISTRICT_MBANZA = true,
-    DISTRICT_AERODROME = true,
-    DISTRICT_SPACEPORT = true
+    DISTRICT_SPACEPORT = true,
+    DISTRICT_GOVERNMENT = true,
+    DISTRICT_DIPLOMATIC_QUARTER = true
 };
 
 local function IsSpecialtyDistrict(districtType, baseDistrictType)
@@ -245,7 +285,22 @@ local function IsSpecialtyDistrict(districtType, baseDistrictType)
     return true;
 end
 
--- Rule 2: Resource Tile Restrictions (Strictly forbid Luxury & Revealed Strategic resources)
+-- Fallback table of Bonus Resource Harvest Technologies
+local BONUS_HARVEST_TECHS = {
+    RESOURCE_BANANAS = "TECH_IRRIGATION",
+    RESOURCE_CATTLE = "TECH_ANIMAL_HUSBANDRY",
+    RESOURCE_COPPER = "TECH_MINING",
+    RESOURCE_CRABS = "TECH_CELESTIAL_NAVIGATION",
+    RESOURCE_DEER = "TECH_ANIMAL_HUSBANDRY",
+    RESOURCE_FISH = "TECH_CELESTIAL_NAVIGATION",
+    RESOURCE_RICE = "TECH_POTTERY",
+    RESOURCE_SHEEP = "TECH_ANIMAL_HUSBANDRY",
+    RESOURCE_STONE = "TECH_MASONRY",
+    RESOURCE_WHEAT = "TECH_POTTERY",
+    RESOURCE_MAIZE = "TECH_POTTERY"
+};
+
+-- Rule 2: Resource Tile Restrictions (Strictly forbid Luxury, Revealed Strategic, & Unharvestable Bonus resources)
 local function HasForbiddenResourceForDistrict(playerID, plot)
     if plot == nil then return false; end
     local rIdx = plot:GetResourceType();
@@ -270,7 +325,36 @@ local function HasForbiddenResourceForDistrict(playerID, plot)
         end
     end
 
-    -- 3. Any non-harvestable resource
+    -- 3. Bonus Resources require their corresponding Harvest Technology to be researched
+    if rInfo.ResourceClassType == "RESOURCECLASS_BONUS" then
+        local prereqTechType = nil;
+        if GameInfo.Resource_Harvests ~= nil then
+            for row in GameInfo.Resource_Harvests() do
+                if row.ResourceType == rInfo.ResourceType then
+                    prereqTechType = row.PrereqTech;
+                    break;
+                end
+            end
+        end
+        if prereqTechType == nil then
+            prereqTechType = BONUS_HARVEST_TECHS[rInfo.ResourceType];
+        end
+
+        if prereqTechType ~= nil then
+            local techInfo = GameInfo.Technologies[prereqTechType];
+            if techInfo ~= nil then
+                local pPlayer = Players[playerID];
+                if pPlayer and pPlayer:GetTechs() then
+                    if not pPlayer:GetTechs():HasTech(techInfo.Index) then
+                        -- Player does not have the harvest tech yet! The game forbids placing districts on it!
+                        return true;
+                    end
+                end
+            end
+        end
+    end
+
+    -- 4. Any non-harvestable resource
     if CanHarvestResource ~= nil and not CanHarvestResource(rInfo.ResourceType) then
         return true;
     end
@@ -320,6 +404,38 @@ local function IsDamAlreadyOnRiver(playerID, px, py)
     return false;
 end
 
+-- Rule 4: Dam Placement Restriction (River Floodplains only, FORBID Coastal Floodplains)
+local function IsValidRiverFloodplainForDam(plot)
+    if plot == nil or plot:IsWater() then return false; end
+
+    -- 1. Gathering Storm Coastal Lowland / Coastal Floodplains check
+    -- Coastal lowlands flood from rising sea level / global warming, NOT river flooding!
+    if TerrainManager ~= nil and TerrainManager.GetCoastalLowlandType ~= nil then
+        local lowlandType = TerrainManager.GetCoastalLowlandType(plot);
+        if lowlandType ~= nil and lowlandType ~= -1 then
+            return false; -- Coastal Lowland / Coastal Floodplain! Forbidden for Dam!
+        end
+    end
+
+    -- 2. Must be a valid River Floodplain feature (Grassland, Plains, Desert)
+    local fIdx = plot:GetFeatureType();
+    if fIdx == -1 then return false; end
+    local fInfo = GameInfo.Features[fIdx];
+    if fInfo == nil then return false; end
+    local fType = fInfo.FeatureType;
+
+    if fType ~= "FEATURE_FLOODPLAINS" and fType ~= "FEATURE_FLOODPLAINS_GRASSLAND" and fType ~= "FEATURE_FLOODPLAINS_PLAINS" then
+        return false;
+    end
+
+    -- 3. Must have at least 2 river edges
+    if plot:GetRiverCrossingCount() < 2 then
+        return false;
+    end
+
+    return true;
+end
+
 -- Rule 4: Vietnam Feature Requirement (Woods / Rainforest / Marsh)
 local function IsValidVietnamFeature(plot)
     if plot == nil then return false; end
@@ -341,30 +457,30 @@ local function CalculateDistrictPriority(item, cityHasFreshWater)
         score = 92 + num * 4;
     elseif baseType == "DISTRICT_COMMERCIAL_HUB" or baseType == "DISTRICT_HARBOR" then
         score = 88 + num * 3;
+    elseif baseType == "DISTRICT_GOVERNMENT" then
+        score = 87; -- High priority non-specialty hub boosting all surrounding districts
     elseif baseType == "DISTRICT_HOLY_SITE" then
         score = 86 + num * 3;
     elseif baseType == "DISTRICT_AQUEDUCT" then
         score = not cityHasFreshWater and 87 or 74;
     elseif baseType == "DISTRICT_INDUSTRIAL_ZONE" then
         score = 85 + num * 3;
-    elseif baseType == "DISTRICT_GOVERNMENT" then
-        score = 82;
     elseif baseType == "DISTRICT_DAM" then
         score = 78;
+    elseif baseType == "DISTRICT_DIPLOMATIC_QUARTER" then
+        score = 76; -- Non-specialty 1-per-empire envoy boost
     elseif baseType == "DISTRICT_ENCAMPMENT" then
         score = 72;
     elseif baseType == "DISTRICT_ENTERTAINMENT_COMPLEX" then
         score = 70;
     elseif baseType == "DISTRICT_THEATER" then
         score = 68 + num * 2;
-    elseif baseType == "DISTRICT_DIPLOMATIC_QUARTER" then
-        score = 65;
     elseif baseType == "DISTRICT_CANAL" then
         score = 55;
     elseif baseType == "DISTRICT_NEIGHBORHOOD" then
         score = 45;
     elseif baseType == "DISTRICT_AERODROME" then
-        score = 30;
+        score = 35;
     elseif baseType == "DISTRICT_SPACEPORT" then
         score = 20;
     end
@@ -886,13 +1002,13 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    -- Step B: Dam (Non-specialty) - Rule 1: 1 Dam per River System across the map!
+    -- Step B: Dam (Non-specialty) - Rule 1 & 4: River Floodplains only, NO Coastal Floodplains, 1 Dam per river system!
     local bestDam = nil;
     if GameInfo.Districts[distDam] ~= nil then
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
-                if not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
+                if IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
                     bestDam = plot;
                     assignedPlots[plot:GetIndex()] = true;
                     table.insert(plannedDistricts, {
@@ -1283,24 +1399,25 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    -- Step K: Government Plaza (Specialty, 1 per empire)
-    if GameInfo.Districts[distGovPlaza] ~= nil and not HasEmpireGovernmentPlaza(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_GOVERNMENT") then
+    -- Step K: Government Plaza (Non-specialty, 1 per empire, free of Pop cap)
+    if not HasEmpireGovernmentPlaza(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_GOVERNMENT") then
         local bestGov = nil;
-        local bestGovScore = 1;
+        local bestGovScore = -1;
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distGovPlaza, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
-                    local touchingCount = 0;
+                    local gScore = 1;
                     local adjPlots = Map.GetAdjacentPlots(px, py);
                     for _, adj in pairs(adjPlots) do
-                        if assignedPlots[adj:GetIndex()] then
-                            touchingCount = touchingCount + 1;
+                        if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) then
+                            gScore = gScore + 1;
                         end
                     end
-                    if touchingCount > bestGovScore then
-                        bestGovScore = touchingCount;
+                    if isCapital then gScore = gScore + 2; end
+                    if gScore > bestGovScore then
+                        bestGovScore = gScore;
                         bestGov = plot;
                     end
                 end
@@ -1315,12 +1432,12 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 BaseName = Locale.Lookup(GameInfo.Districts[distGovPlaza].Name),
                 YieldBonus = "+" .. bestGovScore .. " All Adj & Loyalty",
                 NumericBonus = bestGovScore,
-                IsSpecialty = true
+                IsSpecialty = false
             });
         end
     end
 
-    -- Step L: Diplomatic Quarter (Specialty, 1 per empire)
+    -- Step L: Diplomatic Quarter (Non-specialty, 1 per empire, free of Pop cap)
     if GameInfo.Districts[distDiploQuarter] ~= nil and not HasEmpireDiplomaticQuarter(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_DIPLOMATIC_QUARTER") then
         local bestDiplo = nil;
         local bestDiploScore = 0;
@@ -1352,7 +1469,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 BaseName = Locale.Lookup(GameInfo.Districts[distDiploQuarter].Name),
                 YieldBonus = "+1 Envoy & +Adj",
                 NumericBonus = 1,
-                IsSpecialty = true
+                IsSpecialty = false
             });
         end
     end
@@ -1456,7 +1573,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    -- Step O: Aerodrome (Non-specialty, flat land only)
+    -- Step O: Aerodrome (Specialty, flat land only, consumes Pop slot)
     local bestAerodrome = nil;
     if GameInfo.Districts[distAerodrome] ~= nil then
         local bestAeroScore = -1;
@@ -1483,7 +1600,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 BaseName = Locale.Lookup(GameInfo.Districts[distAerodrome].Name),
                 YieldBonus = "+4 Air Slots & [ICON_Production] Air",
                 NumericBonus = 4,
-                IsSpecialty = false
+                IsSpecialty = true
             });
         end
     end
