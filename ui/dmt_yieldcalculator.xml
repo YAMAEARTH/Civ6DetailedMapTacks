@@ -55,7 +55,7 @@
 
     <Instance Name="DistrictEntryInstance">
         <Container ID="EntryRoot" Size="360,24">
-            <Image ID="DistrictIcon" Size="24,24" Anchor="L,C" IconSize="24"/>
+            <Image ID="DistrictIcon" Size="22,22" Anchor="L,C" IconSize="22"/>
             <Label ID="DistrictNameLabel" Offset="30,0" Anchor="L,C" Style="FontNormal14" ColorSet="BodyTextBright" String="Campus"/>
             <Label ID="DistrictBonusLabel" Anchor="R,C" Style="FontFlair14" FontStyle="Glow" Color0="100,255,100,255" String="+4 Science"/>
         </Container>

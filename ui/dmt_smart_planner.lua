@@ -2,6 +2,7 @@
 -- DMT Smart Planner: Settler Recommendations & City District Optimizer
 -- Author: YAMAEARTH / Antigravity
 -- Pure client-side UI script (Single player & Multiplayer safe)
+-- Shortcut: SHIFT + A
 -- =======================================================================
 
 print("Loading DMT_SmartPlanner.lua");
@@ -32,12 +33,70 @@ local MAP_PIN_TYPES = {
 -- Helper Functions
 -- =======================================================================
 
+-- Safe visibility check using PlayersVisibility service
+local function IsPlotVisibleOrRevealed(plot, playerID)
+    if plot == nil then return false; end
+    if PlayersVisibility ~= nil and PlayersVisibility[playerID] ~= nil then
+        return PlayersVisibility[playerID]:IsRevealed(plot:GetIndex());
+    end
+    return true;
+end
+
 local function IsAutoSettlerPin(x, y)
     return m_AutoSettlerPins[x .. "_" .. y] == true;
 end
 
 local function IsAutoDistrictPin(x, y)
     return m_AutoDistrictPins[x .. "_" .. y] == true;
+end
+
+-- Safely look up any pin that actually exists on the map from PlayerConfigurations
+local function GetPinAtPlot(playerCfg, px, py)
+    if not playerCfg then return nil; end
+    local allPins = playerCfg:GetMapPins();
+    if allPins ~= nil then
+        for _, pin in pairs(allPins) do
+            if pin:GetHexX() == px and pin:GetHexY() == py then
+                return pin;
+            end
+        end
+    end
+    return nil;
+end
+
+-- Check if a plot already has a user-placed manual pin (which we should NOT overwrite)
+local function HasManualPinAtPlot(playerCfg, px, py)
+    local existing = GetPinAtPlot(playerCfg, px, py);
+    if existing ~= nil then
+        local key = px .. "_" .. py;
+        if not m_AutoSettlerPins[key] and not m_AutoDistrictPins[key] then
+            local name = existing:GetName() or "";
+            if not name:match("^#%d.*ตั้งเมือง") then
+                return true;
+            end
+        end
+    end
+    return false;
+end
+
+local function EnsureInstanceManagers()
+    if m_SettlerIM == nil and Controls.SettlerListStack ~= nil then
+        m_SettlerIM = InstanceManager:new("SettlerEntryInstance", "EntryBox", Controls.SettlerListStack);
+        if Controls.SettlerCloseButton then
+            Controls.SettlerCloseButton:RegisterCallback(Mouse.eLClick, function()
+                Controls.SettlerRecommendationPanel:SetHide(true);
+            end);
+        end
+    end
+
+    if m_DistrictIM == nil and Controls.DistrictListStack ~= nil then
+        m_DistrictIM = InstanceManager:new("DistrictEntryInstance", "EntryRoot", Controls.DistrictListStack);
+        if Controls.DistrictCloseButton then
+            Controls.DistrictCloseButton:RegisterCallback(Mouse.eLClick, function()
+                Controls.CityDistrictPlanPanel:SetHide(true);
+            end);
+        end
+    end
 end
 
 -- Get unique district replacement for local player
@@ -100,21 +159,17 @@ function ClearAutoSettlerPins(playerID)
     if not playerCfg then return; end
 
     local hasChanges = false;
-    for key, _ in pairs(m_AutoSettlerPins) do
-        local parts = {};
-        for part in string.gmatch(key, "([^_-]+)") do
-            table.insert(parts, tonumber(part));
-        end
-        if #parts == 2 then
-            local px, py = parts[1], parts[2];
-            local pin = playerCfg:GetMapPin(px, py);
-            if pin ~= nil then
-                local pinName = pin:GetName() or "";
-                if pinName:match("^#%d") then
-                    LuaEvents.DMT_MapPinRemoved(pin);
-                    playerCfg:DeleteMapPin(pin:GetID());
-                    hasChanges = true;
-                end
+    local allPins = playerCfg:GetMapPins();
+    if allPins ~= nil then
+        for pinID, pin in pairs(allPins) do
+            local px, py = pin:GetHexX(), pin:GetHexY();
+            local key = px .. "_" .. py;
+            local pinName = pin:GetName() or "";
+            if m_AutoSettlerPins[key] or pinName:match("^#%d.*ตั้งเมือง") then
+                LuaEvents.DMT_MapPinRemoved(pin);
+                playerCfg:DeleteMapPin(pinID);
+                m_AutoSettlerPins[key] = nil;
+                hasChanges = true;
             end
         end
     end
@@ -128,7 +183,7 @@ end
 
 function IsValidCitySettlePlot(playerID, pPlot)
     if pPlot == nil then return false; end
-    if not pPlot:IsRevealed(playerID) then return false; end
+    if not IsPlotVisibleOrRevealed(pPlot, playerID) then return false; end
     if pPlot:IsWater() then return false; end
     if pPlot:IsImpassable() then return false; end
     if pPlot:IsMountain() then return false; end
@@ -203,7 +258,7 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     -- 3. Ring 1 Yields (6 hexes)
     local ring1Plots = Map.GetAdjacentPlots(px, py);
     for _, adjPlot in pairs(ring1Plots) do
-        if adjPlot ~= nil and adjPlot:IsRevealed(playerID) and not adjPlot:IsImpassable() then
+        if adjPlot ~= nil and IsPlotVisibleOrRevealed(adjPlot, playerID) and not adjPlot:IsImpassable() then
             local f = adjPlot:GetYield(GameInfo.Yields["YIELD_FOOD"].Index);
             local p = adjPlot:GetYield(GameInfo.Yields["YIELD_PRODUCTION"].Index);
             local g = adjPlot:GetYield(GameInfo.Yields["YIELD_GOLD"].Index);
@@ -253,7 +308,7 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     local allWithin2 = GetPlotsWithinXTiles(px, py, 2);
     for _, plot2 in ipairs(allWithin2) do
         local dist = Map.GetPlotDistance(px, py, plot2:GetX(), plot2:GetY());
-        if dist == 2 and plot2:IsRevealed(playerID) and not plot2:IsImpassable() then
+        if dist == 2 and IsPlotVisibleOrRevealed(plot2, playerID) and not plot2:IsImpassable() then
             local f = plot2:GetYield(GameInfo.Yields["YIELD_FOOD"].Index);
             local p = plot2:GetYield(GameInfo.Yields["YIELD_PRODUCTION"].Index);
             score = score + (f * 0.8) + (p * 1.0);
@@ -297,14 +352,16 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     return math.floor(score + 0.5), waterTag, reasons;
 end
 
-function RecommendSettlerSpots(playerID, pUnit)
+function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
     if playerID ~= Game.GetLocalPlayer() then return; end
     if pUnit == nil then return; end
+
+    EnsureInstanceManagers();
 
     local settlerX, settlerY = pUnit:GetX(), pUnit:GetY();
     local settlerPlotIndex = Map.GetPlot(settlerX, settlerY):GetIndex();
 
-    if m_LastSettlerUnitID == pUnit:GetID() and m_LastSettlerPlotIndex == settlerPlotIndex and next(m_AutoSettlerPins) ~= nil then
+    if not bForceRefresh and m_LastSettlerUnitID == pUnit:GetID() and m_LastSettlerPlotIndex == settlerPlotIndex and next(m_AutoSettlerPins) ~= nil then
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(false);
         end
@@ -391,13 +448,7 @@ function RecommendSettlerSpots(playerID, pUnit)
         end
 
         -- 2. Place Map Pin Tack on the World Map
-        local existingPin = playerCfg:GetMapPin(px, py);
-        local canPlacePin = true;
-        if existingPin ~= nil and not IsAutoSettlerPin(px, py) and not IsAutoDistrictPin(px, py) then
-            canPlacePin = false;
-        end
-
-        if canPlacePin then
+        if not HasManualPinAtPlot(playerCfg, px, py) then
             local pinName = string.format("#%d ตั้งเมือง [%d คะแนน]", rank, candidate.Score);
             local pin = playerCfg:GetMapPin(px, py);
             if pin ~= nil then
@@ -411,15 +462,14 @@ function RecommendSettlerSpots(playerID, pUnit)
         end
     end
 
-    -- Broadcast and refresh visual map pins on 3D terrain
     Network.BroadcastPlayerInfo();
     LuaEvents.DMT_RefreshMapPins();
 
-    -- Show the Settler UI Panel on screen
     if Controls.SettlerRecommendationPanel then
         Controls.SettlerRecommendationPanel:SetHide(false);
     end
 
+    UI.PlaySound("Map_Pin_Add");
     print(string.format("DMT Smart Planner: Displayed UI and pinned %d spots for Settler at (%d, %d)", topCount, settlerX, settlerY));
 end
 
@@ -432,18 +482,23 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
     if not playerCfg then return; end
 
     local cityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
-    local hasChanges = false;
+    local cityPlotSet = {};
     for _, plot in ipairs(cityPlots) do
-        local px, py = plot:GetX(), plot:GetY();
-        local key = px .. "_" .. py;
-        if m_AutoDistrictPins[key] then
-            local pin = playerCfg:GetMapPin(px, py);
-            if pin ~= nil then
+        cityPlotSet[plot:GetX() .. "_" .. plot:GetY()] = true;
+    end
+
+    local hasChanges = false;
+    local allPins = playerCfg:GetMapPins();
+    if allPins ~= nil then
+        for pinID, pin in pairs(allPins) do
+            local px, py = pin:GetHexX(), pin:GetHexY();
+            local key = px .. "_" .. py;
+            if cityPlotSet[key] and m_AutoDistrictPins[key] then
                 LuaEvents.DMT_MapPinRemoved(pin);
-                playerCfg:DeleteMapPin(pin:GetID());
+                playerCfg:DeleteMapPin(pinID);
+                m_AutoDistrictPins[key] = nil;
                 hasChanges = true;
             end
-            m_AutoDistrictPins[key] = nil;
         end
     end
 
@@ -457,6 +512,8 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     if playerID ~= Game.GetLocalPlayer() then return; end
     local playerCfg = PlayerConfigurations[playerID];
     if not playerCfg then return; end
+
+    EnsureInstanceManagers();
 
     print(string.format("DMT Smart Planner: Optimizing districts for city at (%d, %d)", cityX, cityY));
 
@@ -477,10 +534,8 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
 
         local hasExistingDistrict = plot:GetDistrictType() ~= -1 or plot:IsCity();
         local isForeignOwned = plot:IsOwned() and plot:GetOwner() ~= playerID;
-        local isImpassable = plot:IsImpassable() or not plot:IsRevealed(playerID);
-
-        local existingPin = playerCfg:GetMapPin(px, py);
-        local hasManualPin = (existingPin ~= nil and not IsAutoDistrictPin(px, py) and not IsAutoSettlerPin(px, py));
+        local isImpassable = plot:IsImpassable() or not IsPlotVisibleOrRevealed(plot, playerID);
+        local hasManualPin = HasManualPinAtPlot(playerCfg, px, py);
 
         if hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin then
             occupiedPlots[pIdx] = true;
@@ -856,16 +911,18 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
 
         -- 2. Place Map Pin on World Map
-        local pin = playerCfg:GetMapPin(px, py);
-        if pin ~= nil then
-            pin:SetName(pinName);
-            pin:SetIconName(iconName);
-            pin:SetVisibility(playerID);
+        if not HasManualPinAtPlot(playerCfg, px, py) then
+            local pin = playerCfg:GetMapPin(px, py);
+            if pin ~= nil then
+                pin:SetName(pinName);
+                pin:SetIconName(iconName);
+                pin:SetVisibility(playerID);
 
-            m_AutoDistrictPins[px .. "_" .. py] = true;
+                m_AutoDistrictPins[px .. "_" .. py] = true;
 
-            local pinSubject = CreateMapPinSubject(pin);
-            table.insert(pinsToUpdate, pinSubject);
+                local pinSubject = CreateMapPinSubject(pin);
+                table.insert(pinsToUpdate, pinSubject);
+            end
         end
     end
 
@@ -876,7 +933,11 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         LuaEvents.DMT_MapPinAdded(playerCfg:GetMapPin(pinSubject.X, pinSubject.Y));
     end
     if #pinsToUpdate > 0 then
-        UpdatePinYields(playerID, pinsToUpdate);
+        if LuaEvents.DMT_UpdatePinYields then
+            LuaEvents.DMT_UpdatePinYields(playerID, pinsToUpdate);
+        elseif UpdatePinYields then
+            UpdatePinYields(playerID, pinsToUpdate);
+        end
     end
 
     -- Show City District HUD Panel
@@ -897,6 +958,105 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
 end
 
 -- =======================================================================
+-- Hotkey Handler (SHIFT + A)
+-- =======================================================================
+local m_LastHotkeyTriggerTime = 0;
+function OnTriggerSmartPlannerHotkey()
+    local now = os.clock();
+    if (now - m_LastHotkeyTriggerTime) < 0.5 then
+        return;
+    end
+    m_LastHotkeyTriggerTime = now;
+
+    local playerID = Game.GetLocalPlayer();
+    if playerID == -1 or playerID == 1000 then return; end
+    local pPlayer = Players[playerID];
+    if not pPlayer then return; end
+
+    print("DMT Hotkey: SHIFT+A pressed. Analyzing selection and context...");
+
+    -- 1. Check if a unit is currently selected
+    local pSelectedUnit = UI.GetHeadSelectedUnit();
+    if pSelectedUnit ~= nil then
+        local unitInfo = GameInfo.Units[pSelectedUnit:GetUnitType()];
+        if unitInfo and (unitInfo.FoundCity == true or unitInfo.FoundCity == 1) then
+            print("DMT Hotkey: Triggering Settler Recommendation for selected Settler");
+            RecommendSettlerSpots(playerID, pSelectedUnit, true);
+            return;
+        end
+    end
+
+    -- 2. Check if a city is currently selected
+    local pSelectedCity = UI.GetHeadSelectedCity();
+    if pSelectedCity ~= nil then
+        print("DMT Hotkey: Triggering District Optimization for selected City");
+        OptimizeCityDistricts(playerID, pSelectedCity:GetX(), pSelectedCity:GetY());
+        return;
+    end
+
+    -- 3. Check cursor plot
+    local cursorX, cursorY = UI.GetCursorPlotCoord();
+    local cursorPlot = Map.GetPlot(cursorX, cursorY);
+    if cursorPlot ~= nil then
+        if cursorPlot:IsCity() then
+            print("DMT Hotkey: Triggering District Optimization for city under cursor");
+            OptimizeCityDistricts(playerID, cursorX, cursorY);
+            return;
+        end
+        local owningCity = (Cities and Cities.GetPlotPurchaseCity) and Cities.GetPlotPurchaseCity(cursorPlot) or nil;
+        if owningCity ~= nil and owningCity:GetOwner() == playerID then
+            print("DMT Hotkey: Triggering District Optimization for owning city: " .. Locale.Lookup(owningCity:GetName()));
+            UI.SelectCity(owningCity);
+            OptimizeCityDistricts(playerID, owningCity:GetX(), owningCity:GetY());
+            return;
+        end
+        local cityAt = CityManager.GetCityAt(cursorX, cursorY);
+        if cityAt ~= nil and cityAt:GetOwner() == playerID then
+            print("DMT Hotkey: Triggering District Optimization for city at cursor plot");
+            OptimizeCityDistricts(playerID, cityAt:GetX(), cityAt:GetY());
+            return;
+        end
+    end
+
+    -- 4. Check if player has any Settler alive
+    local pUnits = pPlayer:GetUnits();
+    if pUnits ~= nil then
+        for i, unit in pUnits:Members() do
+            local uInfo = GameInfo.Units[unit:GetUnitType()];
+            if uInfo and (uInfo.FoundCity == true or uInfo.FoundCity == 1) then
+                print("DMT Hotkey: Found player Settler, selecting and recommending spots");
+                UI.SelectUnit(unit);
+                UI.LookAtPlot(unit:GetX(), unit:GetY());
+                RecommendSettlerSpots(playerID, unit, true);
+                return;
+            end
+        end
+    end
+
+    -- 5. Fallback: optimize capital or first city
+    local pCities = pPlayer:GetCities();
+    if pCities ~= nil then
+        local capital = pCities:GetCapitalCity();
+        if capital ~= nil then
+            print("DMT Hotkey: Fallback to Capital City District Optimization");
+            UI.SelectCity(capital);
+            UI.LookAtPlot(capital:GetX(), capital:GetY());
+            OptimizeCityDistricts(playerID, capital:GetX(), capital:GetY());
+            return;
+        end
+        for i, city in pCities:Members() do
+            print("DMT Hotkey: Fallback to City District Optimization");
+            UI.SelectCity(city);
+            UI.LookAtPlot(city:GetX(), city:GetY());
+            OptimizeCityDistricts(playerID, city:GetX(), city:GetY());
+            return;
+        end
+    end
+
+    print("DMT Hotkey: No Settler or City found to plan.");
+end
+
+-- =======================================================================
 -- Event Handlers
 -- =======================================================================
 
@@ -904,7 +1064,6 @@ function DMT_OnUnitSelectionChanged(playerID, unitID, hexI, hexJ, hexK, bSelecte
     if playerID ~= Game.GetLocalPlayer() then return; end
 
     if not bSelected then
-        -- Deselected: Hide recommendation panel
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(true);
         end
@@ -945,34 +1104,48 @@ function DMT_OnCityAddedToMap(ownerPlayerID, cityID, cityX, cityY)
 end
 
 -- =======================================================================
--- Initialization
+-- Initialization & Input Handling
 -- =======================================================================
-function DMT_SmartPlanner_Initialize()
-    -- Initialize InstanceManagers if controls are defined
-    if Controls.SettlerListStack and Controls.SettlerRecommendationPanel then
-        m_SettlerIM = InstanceManager:new("SettlerEntryInstance", "EntryBox", Controls.SettlerListStack);
-        if Controls.SettlerCloseButton then
-            Controls.SettlerCloseButton:RegisterCallback(Mouse.eLClick, function()
-                Controls.SettlerRecommendationPanel:SetHide(true);
-            end);
-        end
+local m_SmartPlannerInitialized = false;
+local m_IsShiftDownSmartPlanner = false;
+
+function OnSmartPlannerInputHandler(pInputStruct:table)
+    local uiMsg = pInputStruct:GetMessageType();
+    local key = pInputStruct:GetKey();
+
+    if key == Keys.VK_SHIFT then
+        m_IsShiftDownSmartPlanner = (uiMsg == KeyEvents.KeyDown);
     end
 
-    if Controls.DistrictListStack and Controls.CityDistrictPlanPanel then
-        m_DistrictIM = InstanceManager:new("DistrictEntryInstance", "EntryRoot", Controls.DistrictListStack);
-        if Controls.DistrictCloseButton then
-            Controls.DistrictCloseButton:RegisterCallback(Mouse.eLClick, function()
-                Controls.CityDistrictPlanPanel:SetHide(true);
-            end);
+    if (uiMsg == KeyEvents.KeyDown or uiMsg == KeyEvents.KeyUp) then
+        local isShift = m_IsShiftDownSmartPlanner or (pInputStruct.IsShiftDown and pInputStruct:IsShiftDown());
+        local isKeyA = (key == Keys.A or key == 65 or (Keys.VK_A and key == Keys.VK_A));
+        if isShift and isKeyA then
+            print("DMT: Shift+A detected in SmartPlanner context, triggering hotkey!");
+            OnTriggerSmartPlannerHotkey();
+            return true;
         end
     end
+    return false;
+end
+
+function DMT_SmartPlanner_Initialize()
+    if m_SmartPlannerInitialized then return; end
+    m_SmartPlannerInitialized = true;
+
+    EnsureInstanceManagers();
+
+    ContextPtr:SetInputHandler(OnSmartPlannerInputHandler, true);
 
     Events.UnitSelectionChanged.Add(DMT_OnUnitSelectionChanged);
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
 
+    -- Hotkey Listener for SHIFT + A
+    LuaEvents.DMT_TriggerSmartPlannerHotkey.Add(OnTriggerSmartPlannerHotkey);
+
     LuaEvents.DMT_PlanDistrictsForCity.Add(OptimizeCityDistricts);
     LuaEvents.DMT_ClearAutoDistricts.Add(ClearAutoDistrictsForCity);
 
-    print("DMT Smart Planner initialized with HUD UI successfully.");
+    print("DMT Smart Planner initialized with HUD UI & SHIFT+A hotkey successfully.");
 end

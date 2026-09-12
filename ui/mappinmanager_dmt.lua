@@ -193,10 +193,26 @@ function OnInputHandler(pInputStruct:table)
     if BASE_OnInputHandler then
         BASE_OnInputHandler(pInputStruct);
     end
+
+    local uiMsg = pInputStruct:GetMessageType();
+    local key = pInputStruct:GetKey();
+
     -- **Inspired by CQUI. Credits to infixo.**
-    if pInputStruct:GetKey() == Keys.VK_SHIFT then
-        m_IsShiftDown = pInputStruct:GetMessageType() == KeyEvents.KeyDown;
+    if key == Keys.VK_SHIFT then
+        m_IsShiftDown = (uiMsg == KeyEvents.KeyDown);
     end
+
+    -- Hotkey: SHIFT + A triggers DMT Smart Planner
+    if (uiMsg == KeyEvents.KeyDown or uiMsg == KeyEvents.KeyUp) then
+        local isShift = m_IsShiftDown or (pInputStruct.IsShiftDown and pInputStruct:IsShiftDown());
+        local isKeyA = (key == Keys.A or key == 65 or (Keys.VK_A and key == Keys.VK_A));
+        if isShift and isKeyA then
+            print("DMT: Shift+A detected in MapPinManager, triggering Smart Planner!");
+            LuaEvents.DMT_TriggerSmartPlannerHotkey();
+            return true;
+        end
+    end
+
     return false;
 end
 
