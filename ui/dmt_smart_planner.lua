@@ -56,7 +56,7 @@ local function GetPinAtPlot(playerCfg, px, py)
     local allPins = playerCfg:GetMapPins();
     if allPins ~= nil then
         for _, pin in pairs(allPins) do
-            if pin:GetHexX() == px and pin:GetHexY() == py then
+            if pin ~= nil and pin:GetHexX() == px and pin:GetHexY() == py then
                 return pin;
             end
         end
@@ -500,17 +500,28 @@ function ClearAutoSettlerPins(playerID)
 
     local hasChanges = false;
     local allPins = playerCfg:GetMapPins();
+    local pinsToDelete = {};
     if allPins ~= nil then
-        for pinID, pin in pairs(allPins) do
-            local px, py = pin:GetHexX(), pin:GetHexY();
-            local key = px .. "_" .. py;
-            local pinName = pin:GetName() or "";
-            if m_AutoSettlerPins[key] or pinName:match("^#%d.*ตั้งเมือง") then
-                LuaEvents.DMT_MapPinRemoved(pin);
-                playerCfg:DeleteMapPin(pinID);
-                m_AutoSettlerPins[key] = nil;
-                hasChanges = true;
+        for _, pin in pairs(allPins) do
+            if pin ~= nil then
+                local px, py = pin:GetHexX(), pin:GetHexY();
+                local key = px .. "_" .. py;
+                local pinName = pin:GetName() or "";
+                if m_AutoSettlerPins[key] or pinName:match("^#%d.*ตั้งเมือง") then
+                    table.insert(pinsToDelete, { ID = pin:GetID(), Pin = pin, Key = key });
+                end
             end
+        end
+    end
+
+    local deletedIDs = {};
+    for _, item in ipairs(pinsToDelete) do
+        if item.ID ~= nil and not deletedIDs[item.ID] then
+            deletedIDs[item.ID] = true;
+            pcall(function() LuaEvents.DMT_MapPinRemoved(item.Pin); end);
+            pcall(function() playerCfg:DeleteMapPin(item.ID); end);
+            m_AutoSettlerPins[item.Key] = nil;
+            hasChanges = true;
         end
     end
     m_AutoSettlerPins = {};
@@ -584,8 +595,8 @@ end
 local function GetPlotLoyaltyPressure(plot)
     if plot == nil then return 0; end
     if Map ~= nil and Map.GetContinentPlotsLoyalty ~= nil then
-        local loyaltyTable = Map.GetContinentPlotsLoyalty();
-        if loyaltyTable ~= nil then
+        local pcallOk, loyaltyTable = pcall(function() return Map.GetContinentPlotsLoyalty(); end);
+        if pcallOk and loyaltyTable ~= nil then
             local val = loyaltyTable[plot:GetIndex()];
             if val ~= nil and type(val) == "number" then
                 return val;
@@ -1006,18 +1017,29 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
 
     local hasChanges = false;
     local allPins = playerCfg:GetMapPins();
+    local pinsToDelete = {};
     if allPins ~= nil then
-        for pinID, pin in pairs(allPins) do
-            local px, py = pin:GetHexX(), pin:GetHexY();
-            local key = px .. "_" .. py;
-            local pinName = pin:GetName() or "";
-            local isAutoPin = (m_AutoDistrictPins[key] ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
-            if cityPlotSet[key] and isAutoPin then
-                LuaEvents.DMT_MapPinRemoved(pin);
-                playerCfg:DeleteMapPin(pinID);
-                m_AutoDistrictPins[key] = nil;
-                hasChanges = true;
+        for _, pin in pairs(allPins) do
+            if pin ~= nil then
+                local px, py = pin:GetHexX(), pin:GetHexY();
+                local key = px .. "_" .. py;
+                local pinName = pin:GetName() or "";
+                local isAutoPin = (m_AutoDistrictPins[key] ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
+                if cityPlotSet[key] and isAutoPin then
+                    table.insert(pinsToDelete, { ID = pin:GetID(), Pin = pin, Key = key });
+                end
             end
+        end
+    end
+
+    local deletedIDs = {};
+    for _, item in ipairs(pinsToDelete) do
+        if item.ID ~= nil and not deletedIDs[item.ID] then
+            deletedIDs[item.ID] = true;
+            pcall(function() LuaEvents.DMT_MapPinRemoved(item.Pin); end);
+            pcall(function() playerCfg:DeleteMapPin(item.ID); end);
+            m_AutoDistrictPins[item.Key] = nil;
+            hasChanges = true;
         end
     end
 
@@ -1058,12 +1080,21 @@ local function GetFallbackCityName(playerID, cityIndex)
     return "Capital";
 end
 
-function OptimizeCityDistricts(playerID, cityX, cityY, cityID)
+local m_LastOptimizedCities = {};
+function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     if playerID ~= Game.GetLocalPlayer() then return; end
     local playerCfg = PlayerConfigurations[playerID];
     if not playerCfg then return; end
     local pPlayer = Players[playerID];
     if not pPlayer then return; end
+
+    local currentTurn = Game.GetCurrentGameTurn();
+    local cityKey = tostring(cityX) .. "_" .. tostring(cityY);
+    if not bForce and m_LastOptimizedCities[cityKey] == currentTurn then
+        print(string.format("DMT Smart Planner: Skipping redundant district optimization for city at (%s) on turn %d", cityKey, currentTurn));
+        return;
+    end
+    m_LastOptimizedCities[cityKey] = currentTurn;
 
     EnsureInstanceManagers();
 
@@ -2003,78 +2034,99 @@ function ValidateAndRefreshAutoPins(playerID)
 
     local hasRemovedPins = false;
     local replanCities = {}; -- map of cityKey -> { CityX, CityY, CityName }
+    local pinsToRemove = {};
 
-    for pinID, pin in pairs(allPins) do
-        local px, py = pin:GetHexX(), pin:GetHexY();
-        local key = px .. "_" .. py;
-        local pinName = pin:GetName() or "";
+    for _, pin in pairs(allPins) do
+        if pin ~= nil then
+            local px, py = pin:GetHexX(), pin:GetHexY();
+            local key = px .. "_" .. py;
+            local pinName = pin:GetName() or "";
 
-        local autoInfo = m_AutoDistrictPins[key];
-        local isDistrictPin = (autoInfo ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
+            local autoInfo = m_AutoDistrictPins[key];
+            local isDistrictPin = (autoInfo ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
 
-        if isDistrictPin then
-            local plot = Map.GetPlot(px, py);
-            local bShouldRemove = false;
-            local reason = "";
+            if isDistrictPin then
+                local plot = Map.GetPlot(px, py);
+                local bShouldRemove = false;
+                local reason = "";
 
-            if plot == nil then
-                bShouldRemove = true;
-                reason = "Nil plot";
-            elseif plot:IsOwned() and plot:GetOwner() ~= playerID then
-                bShouldRemove = true;
-                reason = "Border taken by foreign civ";
-            elseif plot:GetDistrictType() ~= -1 or plot:IsCity() then
-                bShouldRemove = true;
-                reason = "District or city already constructed";
-            end
+                if plot == nil then
+                    bShouldRemove = true;
+                    reason = "Nil plot";
+                elseif plot:IsOwned() and plot:GetOwner() ~= playerID then
+                    bShouldRemove = true;
+                    reason = "Border taken by foreign civ";
+                elseif plot:GetDistrictType() ~= -1 or plot:IsCity() then
+                    bShouldRemove = true;
+                    reason = "District or city already constructed";
+                end
 
-            local targetCityX = autoInfo and autoInfo.CityX or nil;
-            local targetCityY = autoInfo and autoInfo.CityY or nil;
+                local targetCityX = autoInfo and autoInfo.CityX or nil;
+                local targetCityY = autoInfo and autoInfo.CityY or nil;
 
-            if targetCityX == nil or targetCityY == nil then
-                local cName = pinName:match("^%[(.-)%]%s*#%d") or pinName:match("^%[[^:]+:%s*(.-)%]");
-                local pPlayer = Players[playerID];
-                if pPlayer and pPlayer:GetCities() then
-                    for i, c in pPlayer:GetCities():Members() do
-                        if cName and Locale.Lookup(c:GetName()) == cName then
-                            targetCityX = c:GetX();
-                            targetCityY = c:GetY();
-                            break;
+                if targetCityX == nil or targetCityY == nil then
+                    local cName = pinName:match("^%[(.-)%]%s*#%d") or pinName:match("^%[[^:]+:%s*(.-)%]");
+                    local pPlayer = Players[playerID];
+                    if pPlayer and pPlayer:GetCities() then
+                        for i, c in pPlayer:GetCities():Members() do
+                            if cName and Locale.Lookup(c:GetName()) == cName then
+                                targetCityX = c:GetX();
+                                targetCityY = c:GetY();
+                                break;
+                            end
                         end
                     end
                 end
-            end
 
-            if targetCityX and targetCityY then
-                local pCity = CityManager.GetCityAt(targetCityX, targetCityY);
-                if pCity == nil or pCity:GetOwner() ~= playerID then
-                    bShouldRemove = true;
-                    reason = "City lost or razed";
+                if targetCityX and targetCityY then
+                    local pCity = CityManager.GetCityAt(targetCityX, targetCityY);
+                    if pCity == nil or pCity:GetOwner() ~= playerID then
+                        bShouldRemove = true;
+                        reason = "City lost or razed";
+                    end
                 end
-            end
 
-            if bShouldRemove then
-                print(string.format("DMT Turn Check: Removing invalid district pin at (%d, %d) [%s] - Reason: %s", px, py, pinName, reason));
-                LuaEvents.DMT_MapPinRemoved(pin);
-                playerCfg:DeleteMapPin(pinID);
-                m_AutoDistrictPins[key] = nil;
-                hasRemovedPins = true;
-
-                if reason == "Border taken by foreign civ" and targetCityX and targetCityY then
-                    local cKey = targetCityX .. "_" .. targetCityY;
-                    replanCities[cKey] = { CityX = targetCityX, CityY = targetCityY };
-                end
-            else
-                if m_AutoDistrictPins[key] == nil and targetCityX and targetCityY then
-                    m_AutoDistrictPins[key] = {
-                        CityX = targetCityX,
-                        CityY = targetCityY,
-                        PlotX = px,
-                        PlotY = py,
+                if bShouldRemove then
+                    table.insert(pinsToRemove, {
+                        ID = pin:GetID(),
+                        Pin = pin,
+                        Key = key,
+                        Reason = reason,
+                        TargetCityX = targetCityX,
+                        TargetCityY = targetCityY,
+                        Px = px,
+                        Py = py,
                         PinName = pinName
-                    };
+                    });
+                else
+                    if m_AutoDistrictPins[key] == nil and targetCityX and targetCityY then
+                        m_AutoDistrictPins[key] = {
+                            CityX = targetCityX,
+                            CityY = targetCityY,
+                            PlotX = px,
+                            PlotY = py,
+                            PinName = pinName
+                        };
+                    end
                 end
             end
+        end
+    end
+
+    local deletedIDs = {};
+    for _, item in ipairs(pinsToRemove) do
+        print(string.format("DMT Turn Check: Removing invalid district pin at (%d, %d) [%s] - Reason: %s", item.Px, item.Py, item.PinName, item.Reason));
+        if item.ID ~= nil and not deletedIDs[item.ID] then
+            deletedIDs[item.ID] = true;
+            pcall(function() LuaEvents.DMT_MapPinRemoved(item.Pin); end);
+            pcall(function() playerCfg:DeleteMapPin(item.ID); end);
+            m_AutoDistrictPins[item.Key] = nil;
+            hasRemovedPins = true;
+        end
+
+        if item.Reason == "Border taken by foreign civ" and item.TargetCityX and item.TargetCityY then
+            local cKey = item.TargetCityX .. "_" .. item.TargetCityY;
+            replanCities[cKey] = { CityX = item.TargetCityX, CityY = item.TargetCityY };
         end
     end
 
@@ -2085,7 +2137,7 @@ function ValidateAndRefreshAutoPins(playerID)
 
     for _, cityInfo in pairs(replanCities) do
         print(string.format("DMT Turn Check: Automatically re-planning districts for city at (%d, %d)", cityInfo.CityX, cityInfo.CityY));
-        OptimizeCityDistricts(playerID, cityInfo.CityX, cityInfo.CityY);
+        OptimizeCityDistricts(playerID, cityInfo.CityX, cityInfo.CityY, nil, true);
     end
 end
 
@@ -2134,7 +2186,7 @@ function OnTriggerSmartPlannerHotkey()
     local pSelectedCity = UI.GetHeadSelectedCity();
     if pSelectedCity ~= nil then
         print("DMT Hotkey: Triggering District Optimization for selected City");
-        OptimizeCityDistricts(playerID, pSelectedCity:GetX(), pSelectedCity:GetY(), pSelectedCity:GetID());
+        OptimizeCityDistricts(playerID, pSelectedCity:GetX(), pSelectedCity:GetY(), pSelectedCity:GetID(), true);
         return;
     end
 
@@ -2146,20 +2198,20 @@ function OnTriggerSmartPlannerHotkey()
             print("DMT Hotkey: Triggering District Optimization for city under cursor");
             local cityUnderCursor = CityManager.GetCityAt(cursorX, cursorY);
             local cId = cityUnderCursor and cityUnderCursor:GetID() or -1;
-            OptimizeCityDistricts(playerID, cursorX, cursorY, cId);
+            OptimizeCityDistricts(playerID, cursorX, cursorY, cId, true);
             return;
         end
         local owningCity = (Cities and Cities.GetPlotPurchaseCity) and Cities.GetPlotPurchaseCity(cursorPlot) or nil;
         if owningCity ~= nil and owningCity:GetOwner() == playerID then
             print("DMT Hotkey: Triggering District Optimization for owning city: " .. Locale.Lookup(owningCity:GetName()));
             UI.SelectCity(owningCity);
-            OptimizeCityDistricts(playerID, owningCity:GetX(), owningCity:GetY(), owningCity:GetID());
+            OptimizeCityDistricts(playerID, owningCity:GetX(), owningCity:GetY(), owningCity:GetID(), true);
             return;
         end
         local cityAt = CityManager.GetCityAt(cursorX, cursorY);
         if cityAt ~= nil and cityAt:GetOwner() == playerID then
             print("DMT Hotkey: Triggering District Optimization for city at cursor plot");
-            OptimizeCityDistricts(playerID, cityAt:GetX(), cityAt:GetY(), cityAt:GetID());
+            OptimizeCityDistricts(playerID, cityAt:GetX(), cityAt:GetY(), cityAt:GetID(), true);
             return;
         end
     end
@@ -2187,14 +2239,14 @@ function OnTriggerSmartPlannerHotkey()
             print("DMT Hotkey: Fallback to Capital City District Optimization");
             UI.SelectCity(capital);
             UI.LookAtPlot(capital:GetX(), capital:GetY());
-            OptimizeCityDistricts(playerID, capital:GetX(), capital:GetY(), capital:GetID());
+            OptimizeCityDistricts(playerID, capital:GetX(), capital:GetY(), capital:GetID(), true);
             return;
         end
         for i, city in pCities:Members() do
             print("DMT Hotkey: Fallback to City District Optimization");
             UI.SelectCity(city);
             UI.LookAtPlot(city:GetX(), city:GetY());
-            OptimizeCityDistricts(playerID, city:GetX(), city:GetY(), city:GetID());
+            OptimizeCityDistricts(playerID, city:GetX(), city:GetY(), city:GetID(), true);
             return;
         end
     end
@@ -2252,27 +2304,7 @@ end
 
 function DMT_OnCityAddedToMap(ownerPlayerID, cityID, cityX, cityY)
     if ownerPlayerID ~= Game.GetLocalPlayer() then return; end
-    OptimizeCityDistricts(ownerPlayerID, cityX, cityY, cityID);
-end
-
-function DMT_OnCityInitialized(playerID, cityID)
-    if playerID ~= Game.GetLocalPlayer() then return; end
-    local pPlayer = Players[playerID];
-    if not pPlayer or not pPlayer:GetCities() then return; end
-    local pCity = pPlayer:GetCities():FindID(cityID);
-    if pCity ~= nil then
-        OptimizeCityDistricts(playerID, pCity:GetX(), pCity:GetY(), cityID);
-    end
-end
-
-function DMT_OnCityNameChanged(playerID, cityID)
-    if playerID ~= Game.GetLocalPlayer() then return; end
-    local pPlayer = Players[playerID];
-    if not pPlayer or not pPlayer:GetCities() then return; end
-    local pCity = pPlayer:GetCities():FindID(cityID);
-    if pCity ~= nil then
-        OptimizeCityDistricts(playerID, pCity:GetX(), pCity:GetY(), cityID);
-    end
+    OptimizeCityDistricts(ownerPlayerID, cityX, cityY, cityID, false);
 end
 
 -- =======================================================================
@@ -2329,12 +2361,6 @@ function DMT_SmartPlanner_Initialize()
     Events.UnitSelectionChanged.Add(DMT_OnUnitSelectionChanged);
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
-    if Events.CityInitialized ~= nil then
-        Events.CityInitialized.Add(DMT_OnCityInitialized);
-    end
-    if Events.CityNameChanged ~= nil then
-        Events.CityNameChanged.Add(DMT_OnCityNameChanged);
-    end
 
     -- Turn-by-Turn Dynamic Border & District Validation
     Events.LocalPlayerTurnBegin.Add(DMT_OnLocalPlayerTurnBegin);
