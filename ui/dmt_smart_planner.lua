@@ -47,7 +47,7 @@ local function IsAutoSettlerPin(x, y)
 end
 
 local function IsAutoDistrictPin(x, y)
-    return m_AutoDistrictPins[x .. "_" .. y] == true;
+    return m_AutoDistrictPins[x .. "_" .. y] ~= nil;
 end
 
 -- Safely look up any pin that actually exists on the map from PlayerConfigurations
@@ -71,7 +71,8 @@ local function HasManualPinAtPlot(playerCfg, px, py)
         local key = px .. "_" .. py;
         if not m_AutoSettlerPins[key] and not m_AutoDistrictPins[key] then
             local name = existing:GetName() or "";
-            if not name:match("^#%d.*ตั้งเมือง") then
+            -- Protect user manual pins while not blocking auto-settler or auto-district pins
+            if not name:match("^#%d.*ตั้งเมือง") and not name:match("^%[เมือง") then
                 return true;
             end
         end
@@ -171,6 +172,58 @@ function HasEmpireGovernmentPlaza(playerID)
         end
     end
     return false;
+end
+
+-- Check if Diplomatic Quarter is already built in the empire
+function HasEmpireDiplomaticQuarter(playerID)
+    local pPlayer = Players[playerID];
+    if not pPlayer then return false; end
+    local pCities = pPlayer:GetCities();
+    if not pCities then return false; end
+    for i, pCity in pCities:Members() do
+        local pCityDistricts = pCity:GetDistricts();
+        if pCityDistricts ~= nil then
+            for j, district in pCityDistricts:Members() do
+                if district ~= nil and type(district) == "table" and district.GetType ~= nil then
+                    local dType = district:GetType();
+                    if dType ~= -1 and GameInfo.Districts[dType] ~= nil then
+                        if GameInfo.Districts[dType].DistrictType == "DISTRICT_DIPLOMATIC_QUARTER" then
+                            return true;
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false;
+end
+
+local function IsEmpireDistrictAlreadyPlanned(baseDistrictType)
+    for key, info in pairs(m_AutoDistrictPins) do
+        if type(info) == "table" and (info.BaseDistrictType == baseDistrictType or info.DistrictType == baseDistrictType) then
+            return true;
+        end
+    end
+    return false;
+end
+
+local function IsValidCanalPosition(playerID, px, py, cityX, cityY)
+    local plot = Map.GetPlot(px, py);
+    if plot == nil or plot:IsWater() or plot:IsHills() or plot:IsMountain() then
+        return false;
+    end
+    local adjPlots = Map.GetAdjacentPlots(px, py);
+    local waterOrCityCount = 0;
+    for _, adj in pairs(adjPlots) do
+        if adj ~= nil then
+            if adj:IsWater() and not adj:IsImpassable() then
+                waterOrCityCount = waterOrCityCount + 1;
+            elseif adj:IsCity() or (adj:GetX() == cityX and adj:GetY() == cityY) then
+                waterOrCityCount = waterOrCityCount + 1;
+            end
+        end
+    end
+    return waterOrCityCount >= 2;
 end
 
 -- =======================================================================
@@ -519,7 +572,8 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
         for pinID, pin in pairs(allPins) do
             local px, py = pin:GetHexX(), pin:GetHexY();
             local key = px .. "_" .. py;
-            if cityPlotSet[key] and m_AutoDistrictPins[key] then
+            local pinName = pin:GetName() or "";
+            if cityPlotSet[key] and (m_AutoDistrictPins[key] ~= nil or pinName:match("^%[เมือง")) then
                 LuaEvents.DMT_MapPinRemoved(pin);
                 playerCfg:DeleteMapPin(pinID);
                 m_AutoDistrictPins[key] = nil;
@@ -538,15 +592,44 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     if playerID ~= Game.GetLocalPlayer() then return; end
     local playerCfg = PlayerConfigurations[playerID];
     if not playerCfg then return; end
+    local pPlayer = Players[playerID];
+    if not pPlayer then return; end
 
     EnsureInstanceManagers();
 
-    print(string.format("DMT Smart Planner: Optimizing districts for city at (%d, %d)", cityX, cityY));
+    -- Determine City Information (Name, Capital status, CityID)
+    local pCity = CityManager.GetCityAt(cityX, cityY);
+    if pCity == nil and Cities and Cities.GetCityInPlot then
+        pCity = Cities.GetCityInPlot(Map.GetPlot(cityX, cityY));
+    end
+
+    local isCapital = false;
+    local cityName = "เมือง";
+    local cityID = -1;
+    if pCity ~= nil then
+        cityName = Locale.Lookup(pCity:GetName());
+        isCapital = pCity:IsCapital();
+        cityID = pCity:GetID();
+    else
+        if pPlayer:GetCities() ~= nil then
+            local cap = pPlayer:GetCities():GetCapitalCity();
+            if cap ~= nil and cap:GetX() == cityX and cap:GetY() == cityY then
+                isCapital = true;
+                cityName = Locale.Lookup(cap:GetName());
+                cityID = cap:GetID();
+            end
+        end
+    end
+
+    local cityPrefix = isCapital and ("เมืองหลัก: " .. cityName) or ("เมืองรอง: " .. cityName);
+    print(string.format("DMT Smart Planner: Optimizing districts for [%s] at (%d, %d)", cityPrefix, cityX, cityY));
 
     ClearAutoSettlerPins(playerID);
     if Controls.SettlerRecommendationPanel then
         Controls.SettlerRecommendationPanel:SetHide(true);
     end
+
+    ClearAutoDistrictsForCity(playerID, cityX, cityY);
 
     local allCityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
     local candidatePlots = {};
@@ -570,15 +653,22 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    local distAqueduct   = GetPlayerUniqueDistrict(playerID, "DISTRICT_AQUEDUCT");
-    local distDam        = GetPlayerUniqueDistrict(playerID, "DISTRICT_DAM");
-    local distIZ         = GetPlayerUniqueDistrict(playerID, "DISTRICT_INDUSTRIAL_ZONE");
-    local distCommHub    = GetPlayerUniqueDistrict(playerID, "DISTRICT_COMMERCIAL_HUB");
-    local distHarbor     = GetPlayerUniqueDistrict(playerID, "DISTRICT_HARBOR");
-    local distCampus     = GetPlayerUniqueDistrict(playerID, "DISTRICT_CAMPUS");
-    local distHolySite   = GetPlayerUniqueDistrict(playerID, "DISTRICT_HOLY_SITE");
-    local distTheater    = GetPlayerUniqueDistrict(playerID, "DISTRICT_THEATER");
-    local distGovPlaza   = GetPlayerUniqueDistrict(playerID, "DISTRICT_GOVERNMENT");
+    local distAqueduct      = GetPlayerUniqueDistrict(playerID, "DISTRICT_AQUEDUCT");
+    local distDam           = GetPlayerUniqueDistrict(playerID, "DISTRICT_DAM");
+    local distCanal         = GetPlayerUniqueDistrict(playerID, "DISTRICT_CANAL");
+    local distIZ            = GetPlayerUniqueDistrict(playerID, "DISTRICT_INDUSTRIAL_ZONE");
+    local distHarbor        = GetPlayerUniqueDistrict(playerID, "DISTRICT_HARBOR");
+    local distCommHub       = GetPlayerUniqueDistrict(playerID, "DISTRICT_COMMERCIAL_HUB");
+    local distCampus        = GetPlayerUniqueDistrict(playerID, "DISTRICT_CAMPUS");
+    local distHolySite      = GetPlayerUniqueDistrict(playerID, "DISTRICT_HOLY_SITE");
+    local distEntertainment = GetPlayerUniqueDistrict(playerID, "DISTRICT_ENTERTAINMENT_COMPLEX");
+    local distTheater       = GetPlayerUniqueDistrict(playerID, "DISTRICT_THEATER");
+    local distGovPlaza      = GetPlayerUniqueDistrict(playerID, "DISTRICT_GOVERNMENT");
+    local distDiploQuarter  = GetPlayerUniqueDistrict(playerID, "DISTRICT_DIPLOMATIC_QUARTER");
+    local distEncampment    = GetPlayerUniqueDistrict(playerID, "DISTRICT_ENCAMPMENT");
+    local distNeighborhood  = GetPlayerUniqueDistrict(playerID, "DISTRICT_NEIGHBORHOOD");
+    local distAerodrome     = GetPlayerUniqueDistrict(playerID, "DISTRICT_AERODROME");
+    local distSpaceport     = GetPlayerUniqueDistrict(playerID, "DISTRICT_SPACEPORT");
 
     local plannedDistricts = {};
     local assignedPlots = {};
@@ -614,8 +704,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestAqueduct,
                 DistrictType = distAqueduct,
+                BaseDistrictType = "DISTRICT_AQUEDUCT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distAqueduct].Name),
-                YieldBonus = "+2 Housing"
+                YieldBonus = "+2 Housing & Water"
             });
         end
     end
@@ -632,6 +723,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                     table.insert(plannedDistricts, {
                         Plot = plot,
                         DistrictType = distDam,
+                        BaseDistrictType = "DISTRICT_DAM",
                         BaseName = Locale.Lookup(GameInfo.Districts[distDam].Name),
                         YieldBonus = "+3 Housing & Power"
                     });
@@ -641,7 +733,44 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
     end
 
-    -- Step C: Industrial Zone
+    -- Step C: Canal
+    local bestCanal = nil;
+    if GameInfo.Districts[distCanal] ~= nil then
+        local bestCanalScore = -1;
+        for _, plot in ipairs(candidatePlots) do
+            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
+                local px, py = plot:GetX(), plot:GetY();
+                if IsValidCanalPosition(playerID, px, py, cityX, cityY) then
+                    local pinSub = { X = px, Y = py, Key = distCanal, Type = MAP_PIN_TYPES.DISTRICT };
+                    if CanPlacePin(playerID, pinSub) then
+                        local cScore = 5;
+                        local adjPlots = Map.GetAdjacentPlots(px, py);
+                        for _, adj in pairs(adjPlots) do
+                            if IsPlotAvailable(adj) and not adj:IsWater() and not adj:IsMountain() then
+                                cScore = cScore + 2;
+                            end
+                        end
+                        if cScore > bestCanalScore then
+                            bestCanalScore = cScore;
+                            bestCanal = plot;
+                        end
+                    end
+                end
+            end
+        end
+        if bestCanal ~= nil then
+            assignedPlots[bestCanal:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestCanal,
+                DistrictType = distCanal,
+                BaseDistrictType = "DISTRICT_CANAL",
+                BaseName = Locale.Lookup(GameInfo.Districts[distCanal].Name),
+                YieldBonus = "+2 [ICON_Production] to IZ"
+            });
+        end
+    end
+
+    -- Step D: Industrial Zone
     local bestIZ = nil;
     if GameInfo.Districts[distIZ] ~= nil then
         local bestIZScore = -1;
@@ -657,6 +786,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                             izScore = izScore + 2;
                         end
                         if bestDam and adj:GetIndex() == bestDam:GetIndex() then
+                            izScore = izScore + 2;
+                        end
+                        if bestCanal and adj:GetIndex() == bestCanal:GetIndex() then
                             izScore = izScore + 2;
                         end
                         local rIdx = adj:GetResourceType();
@@ -681,13 +813,14 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestIZ,
                 DistrictType = distIZ,
+                BaseDistrictType = "DISTRICT_INDUSTRIAL_ZONE",
                 BaseName = Locale.Lookup(GameInfo.Districts[distIZ].Name),
                 YieldBonus = "+" .. izBonus .. " [ICON_Production] Prod"
             });
         end
     end
 
-    -- Step D: Harbor
+    -- Step E: Harbor
     local bestHarbor = nil;
     if GameInfo.Districts[distHarbor] ~= nil then
         local bestHarborScore = -1;
@@ -715,16 +848,18 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
         end
         if bestHarbor ~= nil then
             assignedPlots[bestHarbor:GetIndex()] = true;
+            local hBonus = math.max(2, math.floor(bestHarborScore + 0.5));
             table.insert(plannedDistricts, {
                 Plot = bestHarbor,
                 DistrictType = distHarbor,
+                BaseDistrictType = "DISTRICT_HARBOR",
                 BaseName = Locale.Lookup(GameInfo.Districts[distHarbor].Name),
-                YieldBonus = "+" .. math.max(2, bestHarborScore) .. " [ICON_Gold] Gold"
+                YieldBonus = "+" .. hBonus .. " [ICON_Gold] Gold"
             });
         end
     end
 
-    -- Step E: Commercial Hub
+    -- Step F: Commercial Hub
     local bestCommHub = nil;
     if GameInfo.Districts[distCommHub] ~= nil then
         local bestCHScore = -1;
@@ -757,13 +892,14 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestCommHub,
                 DistrictType = distCommHub,
+                BaseDistrictType = "DISTRICT_COMMERCIAL_HUB",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCommHub].Name),
                 YieldBonus = "+" .. chBonus .. " [ICON_Gold] Gold"
             });
         end
     end
 
-    -- Step F: Campus
+    -- Step G: Campus
     local bestCampus = nil;
     if GameInfo.Districts[distCampus] ~= nil then
         local bestCampusScore = -1;
@@ -800,13 +936,14 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestCampus,
                 DistrictType = distCampus,
+                BaseDistrictType = "DISTRICT_CAMPUS",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCampus].Name),
                 YieldBonus = "+" .. cBonus .. " [ICON_Science] Sci"
             });
         end
     end
 
-    -- Step G: Holy Site
+    -- Step H: Holy Site
     local bestHolySite = nil;
     if GameInfo.Districts[distHolySite] ~= nil then
         local bestHSScore = -1;
@@ -842,13 +979,52 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestHolySite,
                 DistrictType = distHolySite,
+                BaseDistrictType = "DISTRICT_HOLY_SITE",
                 BaseName = Locale.Lookup(GameInfo.Districts[distHolySite].Name),
                 YieldBonus = "+" .. hsBonus .. " [ICON_Faith] Faith"
             });
         end
     end
 
-    -- Step H: Theater Square
+    -- Step I: Entertainment Complex
+    local bestEntertainment = nil;
+    if GameInfo.Districts[distEntertainment] ~= nil then
+        local bestECScore = -1;
+        for _, plot in ipairs(candidatePlots) do
+            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+                local px, py = plot:GetX(), plot:GetY();
+                local pinSub = { X = px, Y = py, Key = distEntertainment, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local ecScore = 1;
+                    local adjPlots = Map.GetAdjacentPlots(px, py);
+                    for _, adj in pairs(adjPlots) do
+                        if IsPlotAvailable(adj) and not adj:IsWater() and not adj:IsMountain() then
+                            ecScore = ecScore + 2; -- Potential Theater Square neighbor
+                        end
+                        if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) then
+                            ecScore = ecScore + 0.5;
+                        end
+                    end
+                    if ecScore > bestECScore then
+                        bestECScore = ecScore;
+                        bestEntertainment = plot;
+                    end
+                end
+            end
+        end
+        if bestEntertainment ~= nil then
+            assignedPlots[bestEntertainment:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestEntertainment,
+                DistrictType = distEntertainment,
+                BaseDistrictType = "DISTRICT_ENTERTAINMENT_COMPLEX",
+                BaseName = Locale.Lookup(GameInfo.Districts[distEntertainment].Name),
+                YieldBonus = "+1 Amenity & +2 [ICON_Culture] TS"
+            });
+        end
+    end
+
+    -- Step J: Theater Square
     local bestTheater = nil;
     if GameInfo.Districts[distTheater] ~= nil then
         local bestTSScore = -1;
@@ -860,6 +1036,13 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                     local tsScore = 0;
                     local adjPlots = Map.GetAdjacentPlots(px, py);
                     for _, adj in pairs(adjPlots) do
+                        if bestEntertainment and adj:GetIndex() == bestEntertainment:GetIndex() then
+                            tsScore = tsScore + 2; -- Major adjacency from Entertainment Complex
+                        end
+                        local feat = adj:GetFeatureType();
+                        if feat ~= -1 and GameInfo.Features[feat] and GameInfo.Features[feat].NaturalWonder then
+                            tsScore = tsScore + 2;
+                        end
                         if assignedPlots[adj:GetIndex()] then
                             tsScore = tsScore + 0.5;
                         end
@@ -877,16 +1060,17 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestTheater,
                 DistrictType = distTheater,
+                BaseDistrictType = "DISTRICT_THEATER",
                 BaseName = Locale.Lookup(GameInfo.Districts[distTheater].Name),
                 YieldBonus = "+" .. tsBonus .. " [ICON_Culture] Cul"
             });
         end
     end
 
-    -- Step I: Government Plaza
-    if GameInfo.Districts[distGovPlaza] ~= nil and not HasEmpireGovernmentPlaza(playerID) then
+    -- Step K: Government Plaza (1 per empire)
+    if GameInfo.Districts[distGovPlaza] ~= nil and not HasEmpireGovernmentPlaza(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_GOVERNMENT") then
         local bestGov = nil;
-        local bestGovScore = 2;
+        local bestGovScore = 1;
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
@@ -911,8 +1095,183 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
             table.insert(plannedDistricts, {
                 Plot = bestGov,
                 DistrictType = distGovPlaza,
+                BaseDistrictType = "DISTRICT_GOVERNMENT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distGovPlaza].Name),
-                YieldBonus = "+" .. bestGovScore .. " All Adj"
+                YieldBonus = "+" .. bestGovScore .. " All Adj & Loyalty"
+            });
+        end
+    end
+
+    -- Step L: Diplomatic Quarter (1 per empire)
+    if GameInfo.Districts[distDiploQuarter] ~= nil and not HasEmpireDiplomaticQuarter(playerID) and not IsEmpireDistrictAlreadyPlanned("DISTRICT_DIPLOMATIC_QUARTER") then
+        local bestDiplo = nil;
+        local bestDiploScore = 0;
+        for _, plot in ipairs(candidatePlots) do
+            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+                local px, py = plot:GetX(), plot:GetY();
+                local pinSub = { X = px, Y = py, Key = distDiploQuarter, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local dScore = 1;
+                    local adjPlots = Map.GetAdjacentPlots(px, py);
+                    for _, adj in pairs(adjPlots) do
+                        if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) then
+                            dScore = dScore + 0.5;
+                        end
+                    end
+                    if dScore > bestDiploScore then
+                        bestDiploScore = dScore;
+                        bestDiplo = plot;
+                    end
+                end
+            end
+        end
+        if bestDiplo ~= nil then
+            assignedPlots[bestDiplo:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestDiplo,
+                DistrictType = distDiploQuarter,
+                BaseDistrictType = "DISTRICT_DIPLOMATIC_QUARTER",
+                BaseName = Locale.Lookup(GameInfo.Districts[distDiploQuarter].Name),
+                YieldBonus = "+1 Envoy & +Adj"
+            });
+        end
+    end
+
+    -- Step M: Encampment (Cannot be adjacent to City Center: dist >= 2)
+    local bestEncampment = nil;
+    if GameInfo.Districts[distEncampment] ~= nil then
+        local bestEncScore = -1;
+        for _, plot in ipairs(candidatePlots) do
+            local px, py = plot:GetX(), plot:GetY();
+            local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+            if distFromCity >= 2 and IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+                local pinSub = { X = px, Y = py, Key = distEncampment, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local encScore = 2;
+                    if plot:IsHills() then encScore = encScore + 4; end -- High defense on hills
+                    if distFromCity == 3 then encScore = encScore + 2; end -- Outer perimeter defense
+                    local adjPlots = Map.GetAdjacentPlots(px, py);
+                    for _, adj in pairs(adjPlots) do
+                        local rIdx = adj:GetResourceType();
+                        if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                            encScore = encScore + 1;
+                        end
+                    end
+                    if encScore > bestEncScore then
+                        bestEncScore = encScore;
+                        bestEncampment = plot;
+                    end
+                end
+            end
+        end
+        if bestEncampment ~= nil then
+            assignedPlots[bestEncampment:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestEncampment,
+                DistrictType = distEncampment,
+                BaseDistrictType = "DISTRICT_ENCAMPMENT",
+                BaseName = Locale.Lookup(GameInfo.Districts[distEncampment].Name),
+                YieldBonus = "+2 [ICON_Production] & Defense"
+            });
+        end
+    end
+
+    -- Step N: Neighborhood (Scales with Plot Appeal)
+    local bestNeighborhood = nil;
+    if GameInfo.Districts[distNeighborhood] ~= nil then
+        local bestNScore = -999;
+        local bestAppeal = 0;
+        local bestHousing = 4;
+        for _, plot in ipairs(candidatePlots) do
+            if IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() then
+                local px, py = plot:GetX(), plot:GetY();
+                local pinSub = { X = px, Y = py, Key = distNeighborhood, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local appeal = plot:GetAppeal();
+                    local housing = 4;
+                    if appeal >= 4 then housing = 6;
+                    elseif appeal >= 2 then housing = 5;
+                    elseif appeal >= -1 then housing = 4;
+                    else housing = 3; end
+
+                    local nScore = (appeal * 3) + housing;
+                    if nScore > bestNScore then
+                        bestNScore = nScore;
+                        bestAppeal = appeal;
+                        bestHousing = housing;
+                        bestNeighborhood = plot;
+                    end
+                end
+            end
+        end
+        if bestNeighborhood ~= nil then
+            assignedPlots[bestNeighborhood:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestNeighborhood,
+                DistrictType = distNeighborhood,
+                BaseDistrictType = "DISTRICT_NEIGHBORHOOD",
+                BaseName = Locale.Lookup(GameInfo.Districts[distNeighborhood].Name),
+                YieldBonus = string.format("+%d Housing (Appeal %d)", bestHousing, bestAppeal)
+            });
+        end
+    end
+
+    -- Step O: Aerodrome (Flat land only)
+    local bestAerodrome = nil;
+    if GameInfo.Districts[distAerodrome] ~= nil then
+        local bestAeroScore = -1;
+        for _, plot in ipairs(candidatePlots) do
+            local px, py = plot:GetX(), plot:GetY();
+            local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+            if distFromCity >= 2 and IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
+                local pinSub = { X = px, Y = py, Key = distAerodrome, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local aeroScore = (distFromCity == 3) and 6 or 4;
+                    if aeroScore > bestAeroScore then
+                        bestAeroScore = aeroScore;
+                        bestAerodrome = plot;
+                    end
+                end
+            end
+        end
+        if bestAerodrome ~= nil then
+            assignedPlots[bestAerodrome:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestAerodrome,
+                DistrictType = distAerodrome,
+                BaseDistrictType = "DISTRICT_AERODROME",
+                BaseName = Locale.Lookup(GameInfo.Districts[distAerodrome].Name),
+                YieldBonus = "+4 Air Slots & [ICON_Production] Air"
+            });
+        end
+    end
+
+    -- Step P: Spaceport (Flat land only)
+    local bestSpaceport = nil;
+    if GameInfo.Districts[distSpaceport] ~= nil then
+        local bestSpaceScore = -1;
+        for _, plot in ipairs(candidatePlots) do
+            local px, py = plot:GetX(), plot:GetY();
+            local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+            if distFromCity >= 2 and IsPlotAvailable(plot) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
+                local pinSub = { X = px, Y = py, Key = distSpaceport, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local spaceScore = (distFromCity == 3) and 6 or 4;
+                    if spaceScore > bestSpaceScore then
+                        bestSpaceScore = spaceScore;
+                        bestSpaceport = plot;
+                    end
+                end
+            end
+        end
+        if bestSpaceport ~= nil then
+            assignedPlots[bestSpaceport:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestSpaceport,
+                DistrictType = distSpaceport,
+                BaseDistrictType = "DISTRICT_SPACEPORT",
+                BaseName = Locale.Lookup(GameInfo.Districts[distSpaceport].Name),
+                YieldBonus = "Science Victory Projects"
             });
         end
     end
@@ -925,7 +1284,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     local pinsToUpdate = {};
     for _, item in ipairs(plannedDistricts) do
         local px, py = item.Plot:GetX(), item.Plot:GetY();
-        local pinName = string.format("%s (%s)", item.BaseName, item.YieldBonus);
+        local pinName = string.format("[%s] %s (%s)", cityPrefix, item.BaseName, item.YieldBonus);
         local iconName = "ICON_" .. item.DistrictType;
 
         -- 1. Populate HUD UI list
@@ -944,7 +1303,17 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
                 pin:SetIconName(iconName);
                 pin:SetVisibility(playerID);
 
-                m_AutoDistrictPins[px .. "_" .. py] = true;
+                m_AutoDistrictPins[px .. "_" .. py] = {
+                    CityID = cityID,
+                    CityName = cityName,
+                    IsCapital = isCapital,
+                    CityX = cityX,
+                    CityY = cityY,
+                    DistrictType = item.DistrictType,
+                    BaseDistrictType = item.BaseDistrictType,
+                    BaseName = item.BaseName,
+                    YieldBonus = item.YieldBonus
+                };
 
                 local pinSubject = CreateMapPinSubject(pin);
                 table.insert(pinsToUpdate, pinSubject);
@@ -970,7 +1339,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     if Controls.CityDistrictPlanPanel then
         Controls.CityDistrictPlanPanel:SetHide(false);
         if Controls.CityNameLabel then
-            Controls.CityNameLabel:SetText(string.format("วางแผนเขตเมืองสำเร็จ (%d เขต):", #plannedDistricts));
+            Controls.CityNameLabel:SetText(string.format("ผังเขตสำหรับ [%s] (%d เขต):", cityPrefix, #plannedDistricts));
         end
         if Controls.LookAtCityButton then
             Controls.LookAtCityButton:RegisterCallback(Mouse.eLClick, function()
@@ -980,7 +1349,120 @@ function OptimizeCityDistricts(playerID, cityX, cityY)
     end
 
     UI.PlaySound("Map_Pin_Add");
-    print(string.format("DMT Smart Planner: Successfully displayed UI and placed %d district pins for city!", #plannedDistricts));
+    print(string.format("DMT Smart Planner: Successfully displayed UI and placed %d district pins for [%s]!", #plannedDistricts, cityPrefix));
+end
+
+-- =======================================================================
+-- Turn-by-Turn Dynamic Validation & Auto Refresh
+-- =======================================================================
+
+function ValidateAndRefreshAutoPins(playerID)
+    if playerID == nil or playerID ~= Game.GetLocalPlayer() then
+        playerID = Game.GetLocalPlayer();
+    end
+    if playerID == -1 or playerID == 1000 then return; end
+
+    local playerCfg = PlayerConfigurations[playerID];
+    if not playerCfg then return; end
+
+    local allPins = playerCfg:GetMapPins();
+    if allPins == nil then return; end
+
+    local hasRemovedPins = false;
+    local replanCities = {}; -- map of cityKey -> { CityX, CityY, CityName }
+
+    for pinID, pin in pairs(allPins) do
+        local px, py = pin:GetHexX(), pin:GetHexY();
+        local key = px .. "_" .. py;
+        local pinName = pin:GetName() or "";
+
+        local autoInfo = m_AutoDistrictPins[key];
+        local isDistrictPin = (autoInfo ~= nil) or pinName:match("^%[เมือง");
+
+        if isDistrictPin then
+            local plot = Map.GetPlot(px, py);
+            local bShouldRemove = false;
+            local reason = "";
+
+            if plot == nil then
+                bShouldRemove = true;
+                reason = "Nil plot";
+            elseif plot:IsOwned() and plot:GetOwner() ~= playerID then
+                bShouldRemove = true;
+                reason = "Border taken by foreign civ";
+            elseif plot:GetDistrictType() ~= -1 or plot:IsCity() then
+                bShouldRemove = true;
+                reason = "District or city already constructed";
+            end
+
+            local targetCityX = autoInfo and autoInfo.CityX or nil;
+            local targetCityY = autoInfo and autoInfo.CityY or nil;
+
+            if targetCityX == nil or targetCityY == nil then
+                local cName = pinName:match("^%[[^:]+:%s*(.-)%]");
+                local pPlayer = Players[playerID];
+                if pPlayer and pPlayer:GetCities() then
+                    for i, c in pPlayer:GetCities():Members() do
+                        if cName and Locale.Lookup(c:GetName()) == cName then
+                            targetCityX = c:GetX();
+                            targetCityY = c:GetY();
+                            break;
+                        end
+                    end
+                end
+            end
+
+            if targetCityX and targetCityY then
+                local pCity = CityManager.GetCityAt(targetCityX, targetCityY);
+                if pCity == nil or pCity:GetOwner() ~= playerID then
+                    bShouldRemove = true;
+                    reason = "City lost or razed";
+                end
+            end
+
+            if bShouldRemove then
+                print(string.format("DMT Turn Check: Removing invalid district pin at (%d, %d) [%s] - Reason: %s", px, py, pinName, reason));
+                LuaEvents.DMT_MapPinRemoved(pin);
+                playerCfg:DeleteMapPin(pinID);
+                m_AutoDistrictPins[key] = nil;
+                hasRemovedPins = true;
+
+                if reason == "Border taken by foreign civ" and targetCityX and targetCityY then
+                    local cKey = targetCityX .. "_" .. targetCityY;
+                    replanCities[cKey] = { CityX = targetCityX, CityY = targetCityY };
+                end
+            else
+                if m_AutoDistrictPins[key] == nil and targetCityX and targetCityY then
+                    m_AutoDistrictPins[key] = {
+                        CityX = targetCityX,
+                        CityY = targetCityY,
+                        PinName = pinName
+                    };
+                end
+            end
+        end
+    end
+
+    if hasRemovedPins then
+        Network.BroadcastPlayerInfo();
+        LuaEvents.DMT_RefreshMapPins();
+    end
+
+    for _, cityInfo in pairs(replanCities) do
+        print(string.format("DMT Turn Check: Automatically re-planning districts for city at (%d, %d)", cityInfo.CityX, cityInfo.CityY));
+        OptimizeCityDistricts(playerID, cityInfo.CityX, cityInfo.CityY);
+    end
+end
+
+function DMT_OnLocalPlayerTurnBegin()
+    local playerID = Game.GetLocalPlayer();
+    if playerID == -1 or playerID == 1000 then return; end
+    ValidateAndRefreshAutoPins(playerID);
+end
+
+function DMT_OnPlayerTurnActivated(playerID, bIsFirstTime)
+    if playerID ~= Game.GetLocalPlayer() then return; end
+    ValidateAndRefreshAutoPins(playerID);
 end
 
 -- =======================================================================
@@ -1191,6 +1673,18 @@ function DMT_SmartPlanner_Initialize()
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
 
+    -- Turn-by-Turn Dynamic Border & District Validation
+    Events.LocalPlayerTurnBegin.Add(DMT_OnLocalPlayerTurnBegin);
+    Events.PlayerTurnActivated.Add(DMT_OnPlayerTurnActivated);
+    if Events.LoadGameViewStateDone ~= nil then
+        Events.LoadGameViewStateDone.Add(function()
+            local pId = Game.GetLocalPlayer();
+            if pId ~= -1 and pId ~= 1000 then
+                ValidateAndRefreshAutoPins(pId);
+            end
+        end);
+    end
+
     -- Hotkey Listener for SHIFT + A & Close Panels
     LuaEvents.DMT_TriggerSmartPlannerHotkey.Add(OnTriggerSmartPlannerHotkey);
     LuaEvents.DMT_ClosePanels.Add(function()
@@ -1201,5 +1695,5 @@ function DMT_SmartPlanner_Initialize()
     LuaEvents.DMT_PlanDistrictsForCity.Add(OptimizeCityDistricts);
     LuaEvents.DMT_ClearAutoDistricts.Add(ClearAutoDistrictsForCity);
 
-    print("DMT Smart Planner initialized with HUD UI & SHIFT+A hotkey successfully.");
+    print("DMT Smart Planner initialized with HUD UI, SHIFT+A hotkey, 16 districts, and turn-by-turn validation successfully.");
 end
