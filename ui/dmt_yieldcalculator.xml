@@ -1,25 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Context>
+<Context ConsumeMouse="0">
     <!-- Settler Recommendation UI Floating Panel -->
     <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
-        <Image Texture="Controls_GradientSmall" Size="parent,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
+        <Image Texture="Controls_GradientSmall" Size="340,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="320,auto">
             <!-- Header -->
-            <Container Size="parent,28">
-                <Label ID="SettlerPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_UNIT_SETTLER] แนะนำตำแหน่งตั้งเมือง (Top 3)" ColorSet="WonderHeader" ConsumeMouse="0"/>
-                <Button ID="SettlerCloseButton" Anchor="R,C" Size="26,26" Texture="Controls_CloseButtonSmall" StateOffsetIncrement="0,26" ConsumeMouse="1"/>
+            <Container Size="320,28">
+                <Label ID="SettlerPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_UNIT_SETTLER] แนะนำตั้งเมือง (Top 3)" ColorSet="WonderHeader" ConsumeMouse="0"/>
+                <Button ID="SettlerCloseButton" Anchor="R,C" Size="24,24" Texture="Controls_CloseButtonAlt" ConsumeMouse="1"/>
             </Container>
             <Line Start="0,0" End="320,0" Color="78,119,151,200" Width="1"/>
 
             <!-- List Stack -->
-            <Stack ID="SettlerListStack" StackGrowth="Down" StackPadding="6" Size="parent,auto"/>
+            <Stack ID="SettlerListStack" StackGrowth="Down" StackPadding="6" Size="320,auto"/>
         </Stack>
     </Grid>
 
     <Instance Name="SettlerEntryInstance">
         <Grid ID="EntryBox" Size="320,auto" AutoSizePadding="8,8" Texture="Controls_SubContainer" SliceCorner="10,10" SliceSize="1,1" SliceTextureSize="20,20">
-            <Stack StackGrowth="Down" StackPadding="3" Size="parent,auto">
-                <Container Size="parent,22">
+            <Stack StackGrowth="Down" StackPadding="3" Size="304,auto">
+                <Container Size="304,22">
                     <Label ID="RankLabel" Anchor="L,C" Style="FontFlair16" Color0="255,215,0,255" String="#1"/>
                     <Label ID="ScoreLabel" Anchor="L,C" Offset="30,0" Style="FontNormal14" FontStyle="Glow" ColorSet="BodyTextBright" String="86 คะแนน"/>
                     <Button ID="LookAtButton" Anchor="R,C" Size="80,22" Style="ButtonNormal">
@@ -34,18 +34,18 @@
 
     <!-- City District Planning UI Floating Panel -->
     <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
-        <Image Texture="Controls_GradientSmall" Size="parent,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
+        <Image Texture="Controls_GradientSmall" Size="380,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="360,auto">
-            <Container Size="parent,28">
+            <Container Size="360,28">
                 <Label ID="DistrictPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_DISTRICT_CITY_CENTER] แผนผังเขตเมืองที่ดีที่สุด" ColorSet="WonderHeader" ConsumeMouse="0"/>
-                <Button ID="DistrictCloseButton" Anchor="R,C" Size="26,26" Texture="Controls_CloseButtonSmall" StateOffsetIncrement="0,26" ConsumeMouse="1"/>
+                <Button ID="DistrictCloseButton" Anchor="R,C" Size="24,24" Texture="Controls_CloseButtonAlt" ConsumeMouse="1"/>
             </Container>
             <Line Start="0,0" End="360,0" Color="78,119,151,200" Width="1"/>
 
             <Label ID="CityNameLabel" Style="FontNormal14" Color0="255,220,100,255" String="วางแผนเขตพิเศษและโครงสร้างพื้นฐาน:"/>
-            <Stack ID="DistrictListStack" StackGrowth="Down" StackPadding="4" Size="parent,auto"/>
+            <Stack ID="DistrictListStack" StackGrowth="Down" StackPadding="4" Size="360,auto"/>
 
-            <Container Size="parent,28">
+            <Container Size="360,28">
                 <Button ID="LookAtCityButton" Anchor="C,C" Size="140,24" Style="ButtonNormal">
                     <Label Anchor="C,C" Style="FontNormal14" String="ส่องดูผังเมือง"/>
                 </Button>
