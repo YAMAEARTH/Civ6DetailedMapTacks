@@ -7,6 +7,7 @@ print("Loading DMT_YieldCalculator.lua");
 include( "civ6common" );
 include( "dmt_modifiercalculator" );
 include( "dmt_mappinsubjectmanager" );
+include( "dmt_smart_planner" );
 
 -- =======================================================================
 -- Defining MapPinSubject that would be used within this file:
@@ -1558,6 +1559,8 @@ function DMT_Initialize()
     Events.PlotVisibilityChanged.Add(OnPlotVisibilityChanged);
     Events.LoadGameViewStateDone.Add(OnLoadGameViewStateDone); -- LocalPlayerTurnBegin won't trigger when the game is first loaded.
     Events.LocalPlayerTurnBegin.Add(OnLocalPlayerTurnBegin);
+
+    DMT_SmartPlanner_Initialize();
 end
 
 DMT_Initialize();
