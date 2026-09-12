@@ -551,6 +551,35 @@ function IsValidCitySettlePlot(playerID, pPlot)
     return true;
 end
 
+local function PlayerHasResource(player, resIndex)
+    if player == nil then return false; end
+    local pRes = player:GetResources();
+    if pRes ~= nil then
+        if pRes.GetResourceAmount ~= nil then
+            local amt = pRes:GetResourceAmount(resIndex);
+            if amt ~= nil and amt > 0 then return true; end
+        end
+        if pRes.HasResource ~= nil and pRes:HasResource(resIndex) then
+            return true;
+        end
+    end
+    -- Also check if any existing owned plot in the empire already contains this resource
+    local pCities = player:GetCities();
+    if pCities ~= nil then
+        for _, city in pCities:Members() do
+            local plots = GetPlotsWithinXTiles(city:GetX(), city:GetY(), 3);
+            for _, plot in ipairs(plots) do
+                if plot:IsOwned() and plot:GetOwner() == player:GetID() then
+                    if plot:GetResourceType() == resIndex then
+                        return true;
+                    end
+                end
+            end
+        end
+    end
+    return false;
+end
+
 function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     local score = 0;
     local px, py = pPlot:GetX(), pPlot:GetY();
@@ -689,6 +718,84 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
         table.insert(reasons, "AI แนะนำ");
     end
 
+    -- 7. Subsequent Settler Distance Scoring to Existing Friendly Cities
+    local pPlayer = Players[playerID];
+    local pCities = pPlayer and pPlayer:GetCities();
+    local cityCount = pCities and pCities:GetCount() or 0;
+
+    if cityCount >= 1 then
+        local minCityDist = 999;
+        local nearestCity = nil;
+        for _, city in pCities:Members() do
+            local d = Map.GetPlotDistance(px, py, city:GetX(), city:GetY());
+            if d < minCityDist then
+                minCityDist = d;
+                nearestCity = city;
+            end
+        end
+
+        local nearestCityName = nearestCity and Locale.Lookup(nearestCity:GetName()) or "เมืองเดิม";
+
+        -- Check Rings 1-3 for any Luxury or Strategic resource the empire does NOT possess yet
+        local hasNewResource = false;
+        local newResNames = {};
+        local newResSeen = {};
+        local ring3Plots = GetPlotsWithinXTiles(px, py, 3);
+
+        for _, p in ipairs(ring3Plots) do
+            local rIdx = p:GetResourceType();
+            if rIdx ~= -1 and not newResSeen[rIdx] then
+                local rInfo = GameInfo.Resources[rIdx];
+                if rInfo ~= nil then
+                    local isLux = (rInfo.ResourceClassType == "RESOURCECLASS_LUXURY");
+                    local isStrat = (rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC");
+                    if isLux or isStrat then
+                        local isVisible = true;
+                        if isStrat and pPlayer and pPlayer:GetResources() then
+                            isVisible = pPlayer:GetResources():IsResourceVisible(rInfo.Hash);
+                        end
+                        if isVisible and not PlayerHasResource(pPlayer, rInfo.Index) then
+                            hasNewResource = true;
+                            newResSeen[rIdx] = true;
+                            table.insert(newResNames, Locale.Lookup(rInfo.Name));
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Distance Scoring Logic:
+        -- dist < 4: Rejected by engine (cut off)
+        -- dist == 4 or 5: +15 pts (Golden distance: AoE 6-tile radius buffs & district combos)
+        -- dist == 6: +5 pts (Standard workable distance)
+        -- dist >= 7: -10 pts (Too far from empire)
+        -- Exception: If Rings 1-3 have unowned Luxury or Strategic, +20 pts compensation for claiming new resource
+        if minCityDist < 4 then
+            return -9999, waterTag, {"ระยะใกล้เมืองเกินไป (< 4 ช่อง)"};
+        elseif minCityDist == 4 or minCityDist == 5 then
+            score = score + 15;
+            table.insert(reasons, string.format("ระยะทองคำ %d ช่องจาก %s (+15)", minCityDist, nearestCityName));
+            if hasNewResource then
+                score = score + 10;
+                table.insert(reasons, "เคลมแร่ใหม่ของอาณาจักร: " .. table.concat(newResNames, ", "));
+            end
+        elseif minCityDist == 6 then
+            score = score + 5;
+            table.insert(reasons, string.format("ระยะมาตรฐาน 6 ช่องจาก %s (+5)", nearestCityName));
+            if hasNewResource then
+                score = score + 10;
+                table.insert(reasons, "เคลมแร่ใหม่ของอาณาจักร: " .. table.concat(newResNames, ", "));
+            end
+        else -- minCityDist >= 7
+            score = score - 10;
+            table.insert(reasons, string.format("ระยะห่างเมืองเดิม %d ช่อง (-10)", minCityDist));
+            if hasNewResource then
+                score = score + 20; -- Exception: +20 compensation for claiming new resource far away
+                table.insert(reasons, "เคลมแร่ใหม่ชดเชยระยะไกล (+20): " .. table.concat(newResNames, ", "));
+            end
+        end
+    end
+
     return math.floor(score + 0.5), waterTag, reasons;
 end
 
@@ -730,7 +837,7 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
     end
 
     local candidates = {};
-    local searchPlots = GetPlotsWithinXTiles(settlerX, settlerY, 5);
+    local searchPlots = GetPlotsWithinXTiles(settlerX, settlerY, 6);
     for plotIdx, _ in pairs(grandAIPlots) do
         local aiPlot = Map.GetPlotByIndex(plotIdx);
         if aiPlot ~= nil then table.insert(searchPlots, aiPlot); end
