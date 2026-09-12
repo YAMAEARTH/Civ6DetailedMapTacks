@@ -1,3 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Context>
+    <!-- Settler Recommendation UI Floating Panel -->
+    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
+        <Image Texture="Controls_GradientSmall" Size="parent,24" Color="0,0,0,180" Anchor="C,T"/>
+        <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="320,auto">
+            <!-- Header -->
+            <Container Size="parent,26">
+                <Label ID="SettlerPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_UNIT_SETTLER] แนะนำตำแหน่งตั้งเมือง (Top 3)" ColorSet="WonderHeader"/>
+                <Button ID="SettlerCloseButton" Anchor="R,C" Texture="Controls_CloseButtonAlt" Size="24,24"/>
+            </Container>
+            <Line Start="0,0" End="320,0" Color="78,119,151,200" Width="1"/>
+
+            <!-- List Stack -->
+            <Stack ID="SettlerListStack" StackGrowth="Down" StackPadding="6" Size="parent,auto"/>
+        </Stack>
+    </Grid>
+
+    <Instance Name="SettlerEntryInstance">
+        <Grid ID="EntryBox" Size="320,auto" AutoSizePadding="8,8" Texture="Controls_SubContainer" SliceCorner="10,10" SliceSize="1,1" SliceTextureSize="20,20">
+            <Stack StackGrowth="Down" StackPadding="3" Size="parent,auto">
+                <Container Size="parent,22">
+                    <Label ID="RankLabel" Anchor="L,C" Style="FontFlair16" Color0="255,215,0,255" String="#1"/>
+                    <Label ID="ScoreLabel" Anchor="L,C" Offset="30,0" Style="FontNormal14" FontStyle="Glow" ColorSet="BodyTextBright" String="86 คะแนน"/>
+                    <Button ID="LookAtButton" Anchor="R,C" Size="80,22" Style="ButtonNormal">
+                        <Label Anchor="C,C" Style="FontNormal12" String="ดูตำแหน่ง"/>
+                    </Button>
+                </Container>
+                <Label ID="WaterLabel" Style="FontNormal12" Color0="100,200,255,255" String="น้ำจืด (+3 Housing)"/>
+                <Label ID="DetailsLabel" Style="FontNormal12" ColorSet="BodyText" WrapWidth="300" String="Plains Hills • Food 3+ • Luxury"/>
+            </Stack>
+        </Grid>
+    </Instance>
+
+    <!-- City District Planning UI Floating Panel -->
+    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
+        <Image Texture="Controls_GradientSmall" Size="parent,24" Color="0,0,0,180" Anchor="C,T"/>
+        <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="360,auto">
+            <Container Size="parent,26">
+                <Label ID="DistrictPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_DISTRICT_CITY_CENTER] แผนผังเขตเมืองที่ดีที่สุด" ColorSet="WonderHeader"/>
+                <Button ID="DistrictCloseButton" Anchor="R,C" Texture="Controls_CloseButtonAlt" Size="24,24"/>
+            </Container>
+            <Line Start="0,0" End="360,0" Color="78,119,151,200" Width="1"/>
+
+            <Label ID="CityNameLabel" Style="FontNormal14" Color0="255,220,100,255" String="วางแผนเขตพิเศษและโครงสร้างพื้นฐาน:"/>
+            <Stack ID="DistrictListStack" StackGrowth="Down" StackPadding="4" Size="parent,auto"/>
+
+            <Container Size="parent,28">
+                <Button ID="LookAtCityButton" Anchor="C,C" Size="140,24" Style="ButtonNormal">
+                    <Label Anchor="C,C" Style="FontNormal14" String="ส่องดูผังเมือง"/>
+                </Button>
+            </Container>
+        </Stack>
+    </Grid>
+
+    <Instance Name="DistrictEntryInstance">
+        <Container ID="EntryRoot" Size="360,24">
+            <Image ID="DistrictIcon" Size="24,24" Anchor="L,C" IconSize="24"/>
+            <Label ID="DistrictNameLabel" Offset="30,0" Anchor="L,C" Style="FontNormal14" ColorSet="BodyTextBright" String="Campus"/>
+            <Label ID="DistrictBonusLabel" Anchor="R,C" Style="FontFlair14" FontStyle="Glow" Color0="100,255,100,255" String="+4 Science"/>
+        </Container>
+    </Instance>
 </Context>
