@@ -202,6 +202,13 @@ function OnInputHandler(pInputStruct:table)
         m_IsShiftDown = (uiMsg == KeyEvents.KeyDown);
     end
 
+    -- Close open panels on ESC
+    if key == Keys.VK_ESCAPE and uiMsg == KeyEvents.KeyUp then
+        if LuaEvents.DMT_ClosePanels then
+            LuaEvents.DMT_ClosePanels();
+        end
+    end
+
     -- Hotkey: SHIFT + A triggers DMT Smart Planner
     if (uiMsg == KeyEvents.KeyDown or uiMsg == KeyEvents.KeyUp) then
         local isShift = m_IsShiftDown or (pInputStruct.IsShiftDown and pInputStruct:IsShiftDown());

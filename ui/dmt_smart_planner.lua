@@ -79,23 +79,42 @@ local function HasManualPinAtPlot(playerCfg, px, py)
     return false;
 end
 
+local m_SettlerPanelDismissedByUser = false;
+
+function OnCloseSettlerPanel()
+    m_SettlerPanelDismissedByUser = true;
+    if Controls.SettlerRecommendationPanel then
+        Controls.SettlerRecommendationPanel:SetHide(true);
+    end
+    UI.PlaySound("Play_UI_Click");
+end
+
+function OnCloseDistrictPanel()
+    if Controls.CityDistrictPlanPanel then
+        Controls.CityDistrictPlanPanel:SetHide(true);
+    end
+    UI.PlaySound("Play_UI_Click");
+end
+
 local function EnsureInstanceManagers()
     if m_SettlerIM == nil and Controls.SettlerListStack ~= nil then
         m_SettlerIM = InstanceManager:new("SettlerEntryInstance", "EntryBox", Controls.SettlerListStack);
-        if Controls.SettlerCloseButton then
-            Controls.SettlerCloseButton:RegisterCallback(Mouse.eLClick, function()
-                Controls.SettlerRecommendationPanel:SetHide(true);
-            end);
-        end
+    end
+    if Controls.SettlerCloseButton then
+        Controls.SettlerCloseButton:RegisterCallback(Mouse.eLClick, OnCloseSettlerPanel);
+        Controls.SettlerCloseButton:RegisterCallback(Mouse.eMouseEnter, function()
+            UI.PlaySound("Main_Menu_Mouse_Over");
+        end);
     end
 
     if m_DistrictIM == nil and Controls.DistrictListStack ~= nil then
         m_DistrictIM = InstanceManager:new("DistrictEntryInstance", "EntryRoot", Controls.DistrictListStack);
-        if Controls.DistrictCloseButton then
-            Controls.DistrictCloseButton:RegisterCallback(Mouse.eLClick, function()
-                Controls.CityDistrictPlanPanel:SetHide(true);
-            end);
-        end
+    end
+    if Controls.DistrictCloseButton then
+        Controls.DistrictCloseButton:RegisterCallback(Mouse.eLClick, OnCloseDistrictPanel);
+        Controls.DistrictCloseButton:RegisterCallback(Mouse.eMouseEnter, function()
+            UI.PlaySound("Main_Menu_Mouse_Over");
+        end);
     end
 end
 
@@ -135,12 +154,19 @@ function HasEmpireGovernmentPlaza(playerID)
     local pPlayer = Players[playerID];
     if not pPlayer then return false; end
     local pCities = pPlayer:GetCities();
+    if not pCities then return false; end
     for i, pCity in pCities:Members() do
         local pCityDistricts = pCity:GetDistricts();
-        for district in pCityDistricts:Members() do
-            local districtType = GameInfo.Districts[district:GetType()].DistrictType;
-            if districtType == "DISTRICT_GOVERNMENT" then
-                return true;
+        if pCityDistricts ~= nil then
+            for j, district in pCityDistricts:Members() do
+                if district ~= nil and type(district) == "table" and district.GetType ~= nil then
+                    local dType = district:GetType();
+                    if dType ~= -1 and GameInfo.Districts[dType] ~= nil then
+                        if GameInfo.Districts[dType].DistrictType == "DISTRICT_GOVERNMENT" then
+                            return true;
+                        end
+                    end
+                end
             end
         end
     end
@@ -974,6 +1000,7 @@ function OnTriggerSmartPlannerHotkey()
     if not pPlayer then return; end
 
     print("DMT Hotkey: SHIFT+A pressed. Analyzing selection and context...");
+    m_SettlerPanelDismissedByUser = false;
 
     -- 1. Check if a unit is currently selected
     local pSelectedUnit = UI.GetHeadSelectedUnit();
@@ -1064,6 +1091,7 @@ function DMT_OnUnitSelectionChanged(playerID, unitID, hexI, hexJ, hexK, bSelecte
     if playerID ~= Game.GetLocalPlayer() then return; end
 
     if not bSelected then
+        m_SettlerPanelDismissedByUser = false;
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(true);
         end
@@ -1078,8 +1106,11 @@ function DMT_OnUnitSelectionChanged(playerID, unitID, hexI, hexJ, hexK, bSelecte
 
     local unitInfo = GameInfo.Units[pUnit:GetUnitType()];
     if unitInfo and (unitInfo.FoundCity == true or unitInfo.FoundCity == 1) then
-        RecommendSettlerSpots(playerID, pUnit);
+        if not m_SettlerPanelDismissedByUser then
+            RecommendSettlerSpots(playerID, pUnit);
+        end
     else
+        m_SettlerPanelDismissedByUser = false;
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(true);
         end
@@ -1093,7 +1124,9 @@ function DMT_OnUnitMoveComplete(playerID, unitID, x, y)
     if pSelectedUnit ~= nil and pSelectedUnit:GetID() == unitID then
         local unitInfo = GameInfo.Units[pSelectedUnit:GetUnitType()];
         if unitInfo and (unitInfo.FoundCity == true or unitInfo.FoundCity == 1) then
-            RecommendSettlerSpots(playerID, pSelectedUnit);
+            if not m_SettlerPanelDismissedByUser then
+                RecommendSettlerSpots(playerID, pSelectedUnit);
+            end
         end
     end
 end
@@ -1117,11 +1150,28 @@ function OnSmartPlannerInputHandler(pInputStruct:table)
         m_IsShiftDownSmartPlanner = (uiMsg == KeyEvents.KeyDown);
     end
 
+    -- Close open panels on ESC key
+    if key == Keys.VK_ESCAPE and uiMsg == KeyEvents.KeyUp then
+        local bHandled = false;
+        if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+            OnCloseSettlerPanel();
+            bHandled = true;
+        end
+        if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+            OnCloseDistrictPanel();
+            bHandled = true;
+        end
+        if bHandled then
+            return true;
+        end
+    end
+
     if (uiMsg == KeyEvents.KeyDown or uiMsg == KeyEvents.KeyUp) then
         local isShift = m_IsShiftDownSmartPlanner or (pInputStruct.IsShiftDown and pInputStruct:IsShiftDown());
         local isKeyA = (key == Keys.A or key == 65 or (Keys.VK_A and key == Keys.VK_A));
         if isShift and isKeyA then
             print("DMT: Shift+A detected in SmartPlanner context, triggering hotkey!");
+            m_SettlerPanelDismissedByUser = false;
             OnTriggerSmartPlannerHotkey();
             return true;
         end
@@ -1141,8 +1191,12 @@ function DMT_SmartPlanner_Initialize()
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
 
-    -- Hotkey Listener for SHIFT + A
+    -- Hotkey Listener for SHIFT + A & Close Panels
     LuaEvents.DMT_TriggerSmartPlannerHotkey.Add(OnTriggerSmartPlannerHotkey);
+    LuaEvents.DMT_ClosePanels.Add(function()
+        OnCloseSettlerPanel();
+        OnCloseDistrictPanel();
+    end);
 
     LuaEvents.DMT_PlanDistrictsForCity.Add(OptimizeCityDistricts);
     LuaEvents.DMT_ClearAutoDistricts.Add(ClearAutoDistrictsForCity);

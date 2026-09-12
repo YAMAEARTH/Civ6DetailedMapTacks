@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Context>
     <!-- Settler Recommendation UI Floating Panel -->
-    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
-        <Image Texture="Controls_GradientSmall" Size="parent,24" Color="0,0,0,180" Anchor="C,T"/>
+    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
+        <Image Texture="Controls_GradientSmall" Size="parent,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="320,auto">
             <!-- Header -->
-            <Container Size="parent,26">
-                <Label ID="SettlerPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_UNIT_SETTLER] แนะนำตำแหน่งตั้งเมือง (Top 3)" ColorSet="WonderHeader"/>
-                <Button ID="SettlerCloseButton" Anchor="R,C" Texture="Controls_CloseButtonAlt" Size="24,24"/>
+            <Container Size="parent,28">
+                <Label ID="SettlerPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_UNIT_SETTLER] แนะนำตำแหน่งตั้งเมือง (Top 3)" ColorSet="WonderHeader" ConsumeMouse="0"/>
+                <Button ID="SettlerCloseButton" Anchor="R,C" Size="26,26" Texture="Controls_CloseButtonSmall" StateOffsetIncrement="0,26" ConsumeMouse="1"/>
             </Container>
             <Line Start="0,0" End="320,0" Color="78,119,151,200" Width="1"/>
 
@@ -33,12 +33,12 @@
     </Instance>
 
     <!-- City District Planning UI Floating Panel -->
-    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
-        <Image Texture="Controls_GradientSmall" Size="parent,24" Color="0,0,0,180" Anchor="C,T"/>
+    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
+        <Image Texture="Controls_GradientSmall" Size="parent,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="360,auto">
-            <Container Size="parent,26">
-                <Label ID="DistrictPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_DISTRICT_CITY_CENTER] แผนผังเขตเมืองที่ดีที่สุด" ColorSet="WonderHeader"/>
-                <Button ID="DistrictCloseButton" Anchor="R,C" Texture="Controls_CloseButtonAlt" Size="24,24"/>
+            <Container Size="parent,28">
+                <Label ID="DistrictPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_DISTRICT_CITY_CENTER] แผนผังเขตเมืองที่ดีที่สุด" ColorSet="WonderHeader" ConsumeMouse="0"/>
+                <Button ID="DistrictCloseButton" Anchor="R,C" Size="26,26" Texture="Controls_CloseButtonSmall" StateOffsetIncrement="0,26" ConsumeMouse="1"/>
             </Container>
             <Line Start="0,0" End="360,0" Color="78,119,151,200" Width="1"/>
 
