@@ -1022,11 +1022,15 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
     local playerCfg = PlayerConfigurations[playerID];
     if not playerCfg then return; end
 
-    local cityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
+    local allCityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
     local cityPlotSet = {};
-    for _, plot in ipairs(cityPlots) do
+    for _, plot in ipairs(allCityPlots) do
         cityPlotSet[plot:GetX() .. "_" .. plot:GetY()] = true;
     end
+
+    local pCity = CityManager and CityManager.GetCityAt and CityManager.GetCityAt(cityX, cityY);
+    local isCapital = pCity and pCity.IsCapital and pCity:IsCapital() or false;
+    local thisCityName = (pCity and pCity.GetName and pCity:GetName() ~= "") and Locale.Lookup(pCity:GetName()) or nil;
 
     local hasChanges = false;
     local allPins = playerCfg:GetMapPins();
@@ -1036,10 +1040,45 @@ function ClearAutoDistrictsForCity(playerID, cityX, cityY)
             if pin ~= nil then
                 local px, py = pin:GetHexX(), pin:GetHexY();
                 local key = px .. "_" .. py;
-                local pinName = pin:GetName() or "";
-                local isAutoPin = (m_AutoDistrictPins[key] ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
-                if cityPlotSet[key] and isAutoPin then
-                    table.insert(pinsToDelete, { ID = pin:GetID(), Pin = pin, Key = key });
+                if cityPlotSet[key] then
+                    local pinName = pin:GetName() or "";
+                    local autoInfo = m_AutoDistrictPins[key];
+                    local isAutoPin = (autoInfo ~= nil) or pinName:match("^%[.-%]%s*#%d") or pinName:match("^%[เมือง");
+
+                    if isAutoPin then
+                        local shouldDelete = false;
+
+                        if autoInfo ~= nil then
+                            if autoInfo.CityX == cityX and autoInfo.CityY == cityY then
+                                shouldDelete = true;
+                            elseif isCapital then
+                                -- Capital priority: if secondary city placed a pin in Capital's Ring 1 or 2 (dist <= 2), Capital reclaims it!
+                                local distToCap = Map.GetPlotDistance(px, py, cityX, cityY);
+                                if distToCap <= 2 then
+                                    print(string.format("DMT: Capital reclaiming inner ring tile at (%d, %d) from secondary city!", px, py));
+                                    shouldDelete = true;
+                                end
+                            end
+                        else
+                            -- Fallback name check if autoInfo table not in memory
+                            if thisCityName ~= nil and thisCityName ~= "" then
+                                local escaped = thisCityName:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1");
+                                if pinName:match("^%[" .. escaped .. "%]") then
+                                    shouldDelete = true;
+                                end
+                            end
+                            if not shouldDelete and isCapital then
+                                local distToCap = Map.GetPlotDistance(px, py, cityX, cityY);
+                                if distToCap <= 2 then
+                                    shouldDelete = true;
+                                end
+                            end
+                        end
+
+                        if shouldDelete then
+                            table.insert(pinsToDelete, { ID = pin:GetID(), Pin = pin, Key = key });
+                        end
+                    end
                 end
             end
         end
@@ -1173,12 +1212,51 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
 
     ClearAutoDistrictsForCity(playerID, cityX, cityY);
 
+    -- Requirement 2: Ensure Capital districts are calculated first before secondary city planning
+    if not isCapital and pPlayer:GetCities() ~= nil then
+        local capitalCity = pPlayer:GetCities():GetCapitalCity();
+        if capitalCity ~= nil and (capitalCity:GetX() ~= cityX or capitalCity:GetY() ~= cityY) then
+            -- Check if Capital already has any auto pins in memory or on map
+            local capitalHasPins = false;
+            for _, info in pairs(m_AutoDistrictPins) do
+                if type(info) == "table" and (info.IsCapital or (info.CityX == capitalCity:GetX() and info.CityY == capitalCity:GetY())) then
+                    capitalHasPins = true;
+                    break;
+                end
+            end
+            if not capitalHasPins then
+                print(string.format("DMT: Secondary city [%s] planning, but Capital [%s] has no planned districts yet. Prioritizing Capital first!",
+                    cityName, Locale.Lookup(capitalCity:GetName())));
+                OptimizeCityDistricts(playerID, capitalCity:GetX(), capitalCity:GetY(), capitalCity:GetID(), false);
+            end
+        end
+    end
+
     -- Rule 3: Enforce Workable Range (1 - 3 tiles strictly)
     local allCityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
     local candidatePlots = {};
     local occupiedPlots = {};
 
     occupiedPlots[Map.GetPlot(cityX, cityY):GetIndex()] = true;
+
+    -- Cache other friendly cities for Engine-Lock (Ring 1) and Capital Ring 1 & 2 Protection
+    local otherCities = {};
+    local capitalX, capitalY = nil, nil;
+    if pPlayer and pPlayer:GetCities() ~= nil then
+        local cap = pPlayer:GetCities():GetCapitalCity();
+        if cap ~= nil then
+            capitalX = cap:GetX();
+            capitalY = cap:GetY();
+        end
+        for _, oc in pPlayer:GetCities():Members() do
+            if oc ~= nil then
+                local ocX, ocY = oc:GetX(), oc:GetY();
+                if ocX ~= cityX or ocY ~= cityY then
+                    table.insert(otherCities, { City = oc, X = ocX, Y = ocY, IsCapital = oc:IsCapital() });
+                end
+            end
+        end
+    end
 
     for _, plot in ipairs(allCityPlots) do
         local pIdx = plot:GetIndex();
@@ -1193,7 +1271,45 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         -- Rule 2: Exclude Luxury Resources & Revealed Strategic Resources
         local hasForbiddenRes = HasForbiddenResourceForDistrict(playerID, plot);
 
-        if isOutOfRange or hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin or hasForbiddenRes then
+        -- REQUIREMENT 1: Engine Lock (Ring 1 of ANY other city cannot be swapped in Civ 6!)
+        -- Strictly require Map.GetPlotDistance(plot, otherCity) >= 2
+        local isEngineLockedToOtherCity = false;
+        for _, oc in ipairs(otherCities) do
+            local distToOther = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+            if distToOther < 2 then -- Distance 0 (City Center) or 1 (Ring 1 core tiles)
+                isEngineLockedToOtherCity = true;
+                break;
+            end
+        end
+
+        -- REQUIREMENT 2: Capital Starvation Prevention (Rings 1 & 2 of Capital are locked to Capital!)
+        local isCapitalProtected = false;
+        if not isCapital and capitalX ~= nil and capitalY ~= nil then
+            local distToCap = Map.GetPlotDistance(px, py, capitalX, capitalY);
+            if distToCap <= 2 then -- Rings 1 & 2 of Capital strictly reserved for Capital
+                isCapitalProtected = true;
+            end
+        end
+
+        -- REQUIREMENT 2: Do not steal pins already planned for another city (especially Capital)
+        local isClaimedByOtherCity = false;
+        local autoInfo = m_AutoDistrictPins[px .. "_" .. py];
+        if autoInfo ~= nil then
+            if autoInfo.CityX ~= cityX or autoInfo.CityY ~= cityY then
+                isClaimedByOtherCity = true;
+            end
+        else
+            local pinOnMap = GetPinAtPlot(playerCfg, px, py);
+            if pinOnMap ~= nil then
+                local pName = pinOnMap:GetName() or "";
+                local pinCity = pName:match("^%[(.-)%]%s*#%d");
+                if pinCity ~= nil and cityName ~= nil and pinCity ~= cityName then
+                    isClaimedByOtherCity = true;
+                end
+            end
+        end
+
+        if isOutOfRange or hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin or hasForbiddenRes or isEngineLockedToOtherCity or isCapitalProtected or isClaimedByOtherCity then
             occupiedPlots[pIdx] = true;
         else
             table.insert(candidatePlots, plot);
@@ -1400,7 +1516,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
-                if IsValidAqueductPosition(playerID, px, py) then
+                if Map.GetPlotDistance(cityX, cityY, px, py) == 1 and IsValidAqueductPosition(playerID, px, py) then
                     table.insert(validAqueductPlots, plot);
                 end
             end
@@ -2435,7 +2551,21 @@ function ValidateAndRefreshAutoPins(playerID)
         LuaEvents.DMT_RefreshMapPins();
     end
 
+    local sortedReplanCities = {};
     for _, cityInfo in pairs(replanCities) do
+        table.insert(sortedReplanCities, cityInfo);
+    end
+    table.sort(sortedReplanCities, function(a, b)
+        local pCityA = CityManager and CityManager.GetCityAt and CityManager.GetCityAt(a.CityX, a.CityY);
+        local pCityB = CityManager and CityManager.GetCityAt and CityManager.GetCityAt(b.CityX, b.CityY);
+        local isCapA = pCityA and pCityA.IsCapital and pCityA:IsCapital() or false;
+        local isCapB = pCityB and pCityB.IsCapital and pCityB:IsCapital() or false;
+        if isCapA and not isCapB then return true; end
+        if not isCapA and isCapB then return false; end
+        return false;
+    end);
+
+    for _, cityInfo in ipairs(sortedReplanCities) do
         print(string.format("DMT Turn Check: Automatically re-planning districts for city at (%d, %d)", cityInfo.CityX, cityInfo.CityY));
         OptimizeCityDistricts(playerID, cityInfo.CityX, cityInfo.CityY, nil, true);
     end
@@ -2604,6 +2734,20 @@ end
 
 function DMT_OnCityAddedToMap(ownerPlayerID, cityID, cityX, cityY)
     if ownerPlayerID ~= Game.GetLocalPlayer() then return; end
+
+    local pPlayer = Players[ownerPlayerID];
+    if not pPlayer then return; end
+    local pCities = pPlayer:GetCities();
+    if not pCities then return; end
+
+    local capital = pCities:GetCapitalCity();
+    -- Requirement 2: Always calculate / ensure Capital districts are planned first!
+    if capital ~= nil and (capital:GetX() ~= cityX or capital:GetY() ~= cityY) then
+        print(string.format("DMT: New secondary city at (%d, %d). Ensuring Capital [%s] at (%d, %d) is prioritized and optimized first!",
+            cityX, cityY, Locale.Lookup(capital:GetName()), capital:GetX(), capital:GetY()));
+        OptimizeCityDistricts(ownerPlayerID, capital:GetX(), capital:GetY(), capital:GetID(), false);
+    end
+
     OptimizeCityDistricts(ownerPlayerID, cityX, cityY, cityID, false);
 end
 
