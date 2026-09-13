@@ -2665,12 +2665,21 @@ function DMT_SmartPlanner_Initialize()
 
     EnsureInstanceManagers();
 
-    ContextPtr:SetInputHandler(OnSmartPlannerInputHandler, true);
+    -- Register input handler as non-modal (false) so it never intercepts mouse clicks from HUD or World
+    ContextPtr:SetInputHandler(OnSmartPlannerInputHandler, false);
 
     Events.UnitSelectionChanged.Add(DMT_OnUnitSelectionChanged);
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
     Events.CitySelectionChanged.Add(DMT_OnCitySelectionChanged);
+    Events.LocalPlayerTurnEnd.Add(function()
+        if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+            Controls.CityDistrictPlanPanel:SetHide(true);
+        end
+        if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+            Controls.SettlerRecommendationPanel:SetHide(true);
+        end
+    end);
 
     if LuaEvents.ProductionPanel_Open then
         LuaEvents.ProductionPanel_Open.Add(function()

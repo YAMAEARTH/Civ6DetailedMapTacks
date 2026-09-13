@@ -246,7 +246,7 @@ function OnDMT_RefreshMapPins()
 end
 
 function DMT_Initialize()
-    ContextPtr:SetInputHandler(OnInputHandler, true);
+    ContextPtr:SetInputHandler(OnInputHandler, false);
 
     LuaEvents.DMT_DeleteMapPinRequest.Add(OnDeleteMapPinRequest);
     LuaEvents.DMT_RefreshMapPins.Add(OnDMT_RefreshMapPins);

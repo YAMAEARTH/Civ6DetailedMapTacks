@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Context>
+<Context ConsumeMouse="0">
     <!-- Settler Recommendation UI Floating Panel -->
-    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
+    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
         <Image Texture="Controls_GradientSmall" Size="340,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="320,auto">
             <!-- Header -->
@@ -33,7 +33,7 @@
     </Instance>
 
     <!-- City District Planning UI Floating Panel -->
-    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
+    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
         <Image Texture="Controls_GradientSmall" Size="380,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="360,auto">
             <Container Size="360,28">
@@ -45,6 +45,7 @@
             <Label ID="CityNameLabel" Style="FontNormal14" Color0="255,220,100,255" String="วางแผนเขตพิเศษและโครงสร้างพื้นฐาน:" TruncateWidth="350"/>
             <ScrollPanel ID="DistrictScrollPanel" Size="360,220" Vertical="1" AutoScrollBar="1">
                 <Stack ID="DistrictListStack" StackGrowth="Down" StackPadding="4" Size="340,auto"/>
+                <ScrollBar Style="Slider_Blue" Anchor="R,C" AnchorSide="I,I" Offset="0,0"/>
             </ScrollPanel>
 
             <Container Size="360,28">
