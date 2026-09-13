@@ -1225,6 +1225,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     local isGaul = (civType == "CIVILIZATION_GAUL" or distIZ == "DISTRICT_OPPIDUM");
     local isKongo = (civType == "CIVILIZATION_KONGO" or distNeighborhood == "DISTRICT_MBANZA");
     local isGermany = (civType == "CIVILIZATION_GERMANY" or distIZ == "DISTRICT_HANSA");
+    local isRome = (civType == "CIVILIZATION_ROME" or distAqueduct == "DISTRICT_BATH");
+    local cityPlot = Map.GetPlot(cityX, cityY);
+    local cityHasFreshWater = (cityPlot ~= nil) and cityPlot:IsFreshWater();
 
     -- Identify already constructed or in-progress districts for this city
     local existingCityDistricts = {};        -- map: distTypeName -> pPlot
@@ -1373,44 +1376,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         return true;
     end
 
-    -- Step A: Aqueduct (Non-specialty)
-    local bestAqueduct = nil;
-    if not CityHasDistrict("DISTRICT_AQUEDUCT") and GameInfo.Districts[distAqueduct] ~= nil then
-        local bestAqueductScore = -1;
-        for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot, false) and not plot:IsWater() then
-                local px, py = plot:GetX(), plot:GetY();
-                if IsValidAqueductPosition(playerID, px, py) then
-                    local score = 10;
-                    local adjPlots = Map.GetAdjacentPlots(px, py);
-                    for _, adj in pairs(adjPlots) do
-                        if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
-                            score = score + 5;
-                        end
-                    end
-                    if score > bestAqueductScore then
-                        bestAqueductScore = score;
-                        bestAqueduct = plot;
-                    end
-                end
-            end
-        end
-        if bestAqueduct ~= nil then
-            assignedPlots[bestAqueduct:GetIndex()] = true;
-            table.insert(plannedDistricts, {
-                Plot = bestAqueduct,
-                DistrictType = distAqueduct,
-                BaseDistrictType = "DISTRICT_AQUEDUCT",
-                BaseName = Locale.Lookup(GameInfo.Districts[distAqueduct].Name),
-                YieldBonus = "+2 Housing & Water",
-                NumericBonus = 2,
-                IsSpecialty = false
-            });
-        end
-    end
-    local effectiveAqueductPlot = bestAqueduct or GetExistingDistrictPlot("DISTRICT_AQUEDUCT");
-
-    -- Step B: Dam (Non-specialty) - Rule 1 & 4: River Floodplains only, NO Coastal Floodplains, 1 Dam per river system!
+    -- Step A1: Dam (Non-specialty) - River Floodplains only, NO Coastal Floodplains, 1 Dam per river system!
     local bestDam = nil;
     if not CityHasDistrict("DISTRICT_DAM") and GameInfo.Districts[distDam] ~= nil then
         for _, plot in ipairs(candidatePlots) do
@@ -1418,22 +1384,168 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                 local px, py = plot:GetX(), plot:GetY();
                 if IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
                     bestDam = plot;
-                    assignedPlots[plot:GetIndex()] = true;
-                    table.insert(plannedDistricts, {
-                        Plot = plot,
-                        DistrictType = distDam,
-                        BaseDistrictType = "DISTRICT_DAM",
-                        BaseName = Locale.Lookup(GameInfo.Districts[distDam].Name),
-                        YieldBonus = "+3 Housing & Power",
-                        NumericBonus = 3,
-                        IsSpecialty = false
-                    });
                     break;
                 end
             end
         end
     end
     local effectiveDamPlot = bestDam or GetExistingDistrictPlot("DISTRICT_DAM");
+
+    -- Step A2: Aqueduct / River Bridge (Non-specialty)
+    -- Rule: Must be adjacent to City Center. Only mark if needed for fresh water boost or Industrial Zone +2 synergy!
+    local bestAqueduct = nil;
+    local aqueductYieldBonus = "+2 Housing & Water";
+    if not CityHasDistrict("DISTRICT_AQUEDUCT") and GameInfo.Districts[distAqueduct] ~= nil then
+        local validAqueductPlots = {};
+        for _, plot in ipairs(candidatePlots) do
+            if IsPlotAvailable(plot, false) and not plot:IsWater() then
+                local px, py = plot:GetX(), plot:GetY();
+                if IsValidAqueductPosition(playerID, px, py) then
+                    table.insert(validAqueductPlots, plot);
+                end
+            end
+        end
+
+        if #validAqueductPlots > 0 then
+            if not cityHasFreshWater then
+                -- Case 1: City has NO fresh water -> Desperately needs Aqueduct (+3 to +4 Housing boost)
+                local bestScore = -1;
+                for _, plot in ipairs(validAqueductPlots) do
+                    local px, py = plot:GetX(), plot:GetY();
+                    local score = 10;
+                    local adjPlots = Map.GetAdjacentPlots(px, py);
+                    for _, adj in pairs(adjPlots) do
+                        if effectiveDamPlot and adj:GetIndex() == effectiveDamPlot:GetIndex() then
+                            score = score + 8;
+                        elseif IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
+                            score = score + 3;
+                        end
+                    end
+                    -- Penalize stealing prime Mountain tiles that Campus needs for +3/+4
+                    local mCount = 0;
+                    for _, adj in pairs(adjPlots) do
+                        if adj:IsMountain() then mCount = mCount + 1; end
+                    end
+                    if mCount >= 2 then score = score - 6; end
+
+                    if score > bestScore then
+                        bestScore = score;
+                        bestAqueduct = plot;
+                    end
+                end
+                aqueductYieldBonus = "+4 Housing (น้ำจืด)";
+
+            elseif isRome then
+                -- Case 2: Rome's Bath -> Always high value (+1 Amenity, +2 Housing, half cost)
+                local bestScore = -1;
+                for _, plot in ipairs(validAqueductPlots) do
+                    local score = 10;
+                    local adjPlots = Map.GetAdjacentPlots(plot:GetX(), plot:GetY());
+                    for _, adj in pairs(adjPlots) do
+                        if effectiveDamPlot and adj:GetIndex() == effectiveDamPlot:GetIndex() then
+                            score = score + 8;
+                        elseif IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
+                            score = score + 3;
+                        end
+                    end
+                    if score > bestScore then
+                        bestScore = score;
+                        bestAqueduct = plot;
+                    end
+                end
+                aqueductYieldBonus = "+2 Housing, +1 Amenity";
+
+            else
+                -- Case 3: City ALREADY has fresh water -> ONLY build Aqueduct if it boosts Industrial Zone!
+                local bestPairScore = -1;
+                local bestPairAQ = nil;
+
+                for _, aqPlot in ipairs(validAqueductPlots) do
+                    local aqIndex = aqPlot:GetIndex();
+                    local adjPlots = Map.GetAdjacentPlots(aqPlot:GetX(), aqPlot:GetY());
+                    for _, izCandidate in pairs(adjPlots) do
+                        local izIndex = izCandidate:GetIndex();
+                        if izIndex ~= aqIndex and IsPlotAvailable(izCandidate, false) and not izCandidate:IsWater() and not izCandidate:IsMountain() then
+                            local izX, izY = izCandidate:GetX(), izCandidate:GetY();
+                            local distFromCity = Map.GetPlotDistance(cityX, cityY, izX, izY);
+                            local bGaulValid = (not isGaul) or (distFromCity >= 2);
+
+                            if bGaulValid then
+                                local testIZScore = 2.0; -- +2 from this Aqueduct!
+                                local izSurroundings = Map.GetAdjacentPlots(izX, izY);
+                                for _, sPlot in pairs(izSurroundings) do
+                                    local sIdx = sPlot:GetIndex();
+                                    if effectiveDamPlot and sIdx == effectiveDamPlot:GetIndex() then
+                                        testIZScore = testIZScore + 2.0; -- +2 from Dam!
+                                    end
+                                    local rIdx = sPlot:GetResourceType();
+                                    if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                                        testIZScore = testIZScore + 1.0;
+                                    end
+                                    local tIdx = sPlot:GetTerrainType();
+                                    if tIdx ~= -1 and GameInfo.Terrains[tIdx] and GameInfo.Terrains[tIdx].Hills then
+                                        testIZScore = testIZScore + 0.5;
+                                    end
+                                    if (sPlot:IsCity() and sPlot:GetX() == cityX and sPlot:GetY() == cityY) or assignedPlots[sIdx] then
+                                        testIZScore = testIZScore + 0.5;
+                                    end
+                                end
+
+                                -- Check if aqPlot is on a high-mountain tile that Campus wants
+                                local aqMountainCount = 0;
+                                for _, mAdj in pairs(Map.GetAdjacentPlots(aqPlot:GetX(), aqPlot:GetY())) do
+                                    if mAdj:IsMountain() then aqMountainCount = aqMountainCount + 1; end
+                                end
+                                if aqMountainCount >= 2 then
+                                    testIZScore = testIZScore - 1.5;
+                                end
+
+                                if testIZScore > bestPairScore then
+                                    bestPairScore = testIZScore;
+                                    bestPairAQ = aqPlot;
+                                end
+                            end
+                        end
+                    end
+                end
+
+                -- Only plan Aqueduct if the synergy achieves at least +3 Production for the Industrial Zone!
+                if bestPairScore >= 3.0 and bestPairAQ ~= nil then
+                    bestAqueduct = bestPairAQ;
+                    aqueductYieldBonus = "+2 Housing • บัฟโรงงาน +2";
+                else
+                    bestAqueduct = nil;
+                end
+            end
+        end
+
+        if bestAqueduct ~= nil then
+            assignedPlots[bestAqueduct:GetIndex()] = true;
+            table.insert(plannedDistricts, {
+                Plot = bestAqueduct,
+                DistrictType = distAqueduct,
+                BaseDistrictType = "DISTRICT_AQUEDUCT",
+                BaseName = Locale.Lookup(GameInfo.Districts[distAqueduct].Name),
+                YieldBonus = aqueductYieldBonus,
+                NumericBonus = 2,
+                IsSpecialty = false
+            });
+        end
+    end
+    local effectiveAqueductPlot = bestAqueduct or GetExistingDistrictPlot("DISTRICT_AQUEDUCT");
+
+    if bestDam ~= nil then
+        assignedPlots[bestDam:GetIndex()] = true;
+        table.insert(plannedDistricts, {
+            Plot = bestDam,
+            DistrictType = distDam,
+            BaseDistrictType = "DISTRICT_DAM",
+            BaseName = Locale.Lookup(GameInfo.Districts[distDam].Name),
+            YieldBonus = "+3 Housing & Power",
+            NumericBonus = 3,
+            IsSpecialty = false
+        });
+    end
 
     -- Step C: Canal (Non-specialty)
     local bestCanal = nil;
@@ -2072,9 +2184,6 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     local effectiveSpaceportPlot = bestSpaceport or GetExistingDistrictPlot("DISTRICT_SPACEPORT");
 
     -- Rule 5: Priority Ranking & Population Cap Assignment
-    local cityPlot = Map.GetPlot(cityX, cityY);
-    local cityHasFreshWater = cityPlot and cityPlot:IsFreshWater();
-
     for _, item in ipairs(plannedDistricts) do
         item.PriorityScore = CalculateDistrictPriority(item, cityHasFreshWater);
     end
