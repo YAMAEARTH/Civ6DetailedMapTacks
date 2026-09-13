@@ -2093,10 +2093,10 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                 reqPop = (specialtyCount == 1) and 1 or (1 + (specialtyCount - 2) * 3);
             end
             item.PopReq = reqPop;
-            item.PopReqText = "ต้องการ Pop " .. reqPop;
+            item.PopReqText = "Pop " .. reqPop;
         else
             item.PopReq = 0;
-            item.PopReqText = "ไม่จำกัด Pop";
+            item.PopReqText = "ไม่กิน Pop";
         end
     end
 
@@ -2156,11 +2156,18 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         for _, builtItem in ipairs(builtDistrictsList) do
             local uiEntry = m_DistrictIM:GetInstance();
             uiEntry.DistrictIcon:SetIcon(builtItem.IconName);
-            uiEntry.DistrictNameLabel:SetText(string.format("[สร้างแล้ว] %s", builtItem.BaseName));
+            uiEntry.DistrictNameLabel:SetText(string.format("%s [เสร็จ]", builtItem.BaseName));
             local plotCoords = (builtItem.Plot ~= nil) and string.format("(%d, %d)", builtItem.Plot:GetX(), builtItem.Plot:GetY()) or "ในเมือง";
-            local specText = builtItem.IsSpecialty and "เขตเฉพาะทาง (นับโควตา Pop แล้ว)" or "เขตพิเศษ (ไม่กินโควตา Pop)";
-            uiEntry.DistrictBonusLabel:SetText(string.format("เสร็จแล้วที่ %s • %s", plotCoords, specText));
+            local specText = builtItem.IsSpecialty and "นับ Pop" or "ไม่กิน Pop";
+            uiEntry.DistrictBonusLabel:SetText(string.format("%s • %s", plotCoords, specText));
         end
+    end
+
+    if Controls.DistrictListStack then
+        Controls.DistrictListStack:CalculateSize();
+    end
+    if Controls.DistrictScrollPanel then
+        Controls.DistrictScrollPanel:CalculateSize();
     end
 
     Network.BroadcastPlayerInfo();
@@ -2491,6 +2498,15 @@ function DMT_OnCityAddedToMap(ownerPlayerID, cityID, cityX, cityY)
     OptimizeCityDistricts(ownerPlayerID, cityX, cityY, cityID, false);
 end
 
+function DMT_OnCitySelectionChanged(owner, cityID, i, j, k, bSelected, bEditable)
+    if owner ~= Game.GetLocalPlayer() then return; end
+    if not bSelected then
+        if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+            Controls.CityDistrictPlanPanel:SetHide(true);
+        end
+    end
+end
+
 -- =======================================================================
 -- Initialization & Input Handling
 -- =======================================================================
@@ -2545,6 +2561,22 @@ function DMT_SmartPlanner_Initialize()
     Events.UnitSelectionChanged.Add(DMT_OnUnitSelectionChanged);
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
+    Events.CitySelectionChanged.Add(DMT_OnCitySelectionChanged);
+
+    if LuaEvents.ProductionPanel_Open then
+        LuaEvents.ProductionPanel_Open.Add(function()
+            if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+                Controls.CityDistrictPlanPanel:SetHide(true);
+            end
+        end);
+    end
+    if LuaEvents.CityPanel_ProductionOpen then
+        LuaEvents.CityPanel_ProductionOpen.Add(function()
+            if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+                Controls.CityDistrictPlanPanel:SetHide(true);
+            end
+        end);
+    end
 
     -- Turn-by-Turn Dynamic Border & District Validation
     Events.LocalPlayerTurnBegin.Add(DMT_OnLocalPlayerTurnBegin);

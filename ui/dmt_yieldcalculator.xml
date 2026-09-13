@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Context ConsumeMouse="0">
+<Context>
     <!-- Settler Recommendation UI Floating Panel -->
-    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
+    <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
         <Image Texture="Controls_GradientSmall" Size="340,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="320,auto">
             <!-- Header -->
             <Container Size="320,28">
                 <Label ID="SettlerPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_UNIT_SETTLER] แนะนำตั้งเมือง (Top 3)" ColorSet="WonderHeader" ConsumeMouse="0"/>
-                <Button ID="SettlerCloseButton" Anchor="R,C" Size="24,24" Texture="Controls_CloseButtonAlt" ConsumeMouse="1"/>
+                <Button ID="SettlerCloseButton" Anchor="R,C" Size="24,24" Texture="Controls_CloseButtonAlt"/>
             </Container>
             <Line Start="0,0" End="320,0" Color="78,119,151,200" Width="1"/>
 
@@ -33,17 +33,19 @@
     </Instance>
 
     <!-- City District Planning UI Floating Panel -->
-    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
+    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1">
         <Image Texture="Controls_GradientSmall" Size="380,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="360,auto">
             <Container Size="360,28">
                 <Label ID="DistrictPanelTitle" Anchor="L,C" Style="FontFlair16" String="[ICON_DISTRICT_CITY_CENTER] แผนผังเขตเมืองที่ดีที่สุด" ColorSet="WonderHeader" ConsumeMouse="0"/>
-                <Button ID="DistrictCloseButton" Anchor="R,C" Size="24,24" Texture="Controls_CloseButtonAlt" ConsumeMouse="1"/>
+                <Button ID="DistrictCloseButton" Anchor="R,C" Size="24,24" Texture="Controls_CloseButtonAlt"/>
             </Container>
             <Line Start="0,0" End="360,0" Color="78,119,151,200" Width="1"/>
 
-            <Label ID="CityNameLabel" Style="FontNormal14" Color0="255,220,100,255" String="วางแผนเขตพิเศษและโครงสร้างพื้นฐาน:"/>
-            <Stack ID="DistrictListStack" StackGrowth="Down" StackPadding="4" Size="360,auto"/>
+            <Label ID="CityNameLabel" Style="FontNormal14" Color0="255,220,100,255" String="วางแผนเขตพิเศษและโครงสร้างพื้นฐาน:" TruncateWidth="350"/>
+            <ScrollPanel ID="DistrictScrollPanel" Size="360,220" Vertical="1" AutoScrollBar="1">
+                <Stack ID="DistrictListStack" StackGrowth="Down" StackPadding="4" Size="340,auto"/>
+            </ScrollPanel>
 
             <Container Size="360,28">
                 <Button ID="LookAtCityButton" Anchor="C,C" Size="140,24" Style="ButtonNormal">
@@ -54,10 +56,10 @@
     </Grid>
 
     <Instance Name="DistrictEntryInstance">
-        <Container ID="EntryRoot" Size="360,24">
+        <Container ID="EntryRoot" Size="340,24">
             <Image ID="DistrictIcon" Size="22,22" Anchor="L,C" IconSize="22"/>
-            <Label ID="DistrictNameLabel" Offset="30,0" Anchor="L,C" Style="FontNormal14" ColorSet="BodyTextBright" String="Campus"/>
-            <Label ID="DistrictBonusLabel" Anchor="R,C" Style="FontFlair14" FontStyle="Glow" Color0="100,255,100,255" String="+4 Science"/>
+            <Label ID="DistrictNameLabel" Offset="28,0" Anchor="L,C" Style="FontNormal14" ColorSet="BodyTextBright" String="Campus" TruncateWidth="150"/>
+            <Label ID="DistrictBonusLabel" Anchor="R,C" Style="FontFlair14" FontStyle="Glow" Color0="100,255,100,255" Align="Right" String="+4 Science" TruncateWidth="160"/>
         </Container>
     </Instance>
 </Context>
