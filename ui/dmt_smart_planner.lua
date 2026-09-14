@@ -1251,24 +1251,30 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         end
     end
 
+    local thisCityID = (pCity and pCity:GetID()) or cityID;
     local alivePlayers = Game.GetPlayers{Alive = true};
     for _, aPlayer in ipairs(alivePlayers) do
+        local aPlayerID = aPlayer:GetID();
         local aCities = aPlayer:GetCities();
         if aCities ~= nil then
             for _, c in aCities:Members() do
                 if c ~= nil then
                     local cx, cy = c:GetX(), c:GetY();
-                    if cx ~= cityX or cy ~= cityY then
-                        local isSame = (aPlayer:GetID() == playerID);
+                    local cID = c:GetID();
+                    -- STRICT RULE: Must NEVER include THIS city (the city currently being planned) in allCitiesOnMap!
+                    local isThisCity = (aPlayerID == playerID) and ((cx == cityX and cy == cityY) or (thisCityID ~= nil and thisCityID ~= -1 and cID == thisCityID));
+                    if not isThisCity then
+                        local isSame = (aPlayerID == playerID);
                         local isCap = false;
                         pcall(function() if c.IsCapital then isCap = c:IsCapital(); end end);
                         local cName = "City";
                         pcall(function() if c.GetName then cName = Locale.Lookup(c:GetName()); end end);
                         local cityEntry = {
                             City = c,
+                            CityID = cID,
                             X = cx,
                             Y = cy,
-                            Owner = aPlayer:GetID(),
+                            Owner = aPlayerID,
                             IsSamePlayer = isSame,
                             IsCapital = isCap,
                             Name = cName
@@ -1296,14 +1302,16 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         -- Rule 2: Exclude Luxury Resources & Revealed Strategic Resources
         local hasForbiddenRes = HasForbiddenResourceForDistrict(playerID, plot);
 
-        -- Proximity to nearest other city across the entire map
+        -- Proximity to nearest OTHER city across the entire map (strictly excluding this city!)
         local minDistToAnyCity = 999;
         local nearestCity = nil;
         for _, oc in ipairs(allCitiesOnMap) do
-            local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
-            if d < minDistToAnyCity then
-                minDistToAnyCity = d;
-                nearestCity = oc;
+            if not (oc.X == cityX and oc.Y == cityY) and (thisCityID == nil or oc.CityID ~= thisCityID or not oc.IsSamePlayer) then
+                local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+                if d < minDistToAnyCity then
+                    minDistToAnyCity = d;
+                    nearestCity = oc;
+                end
             end
         end
 
@@ -1539,12 +1547,14 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                 if IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
                     local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
 
-                    -- Check distance to all other cities on map
+                    -- Check distance to all OTHER cities on map (strictly excluding this city!)
                     local minOtherDist = 999;
                     for _, oc in ipairs(allCitiesOnMap) do
-                        local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
-                        if d < minOtherDist then
-                            minOtherDist = d;
+                        if not (oc.X == cityX and oc.Y == cityY) and (thisCityID == nil or oc.CityID ~= thisCityID or not oc.IsSamePlayer) then
+                            local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+                            if d < minOtherDist then
+                                minOtherDist = d;
+                            end
                         end
                     end
 
