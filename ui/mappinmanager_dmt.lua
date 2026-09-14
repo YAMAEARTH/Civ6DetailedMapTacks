@@ -189,21 +189,29 @@ function OnAutoDeleteChooseNo(playerID, plotX, plotY)
     end
 end
 
-function OnInputHandler(pInputStruct:table)
-    if BASE_OnInputHandler then
-        BASE_OnInputHandler(pInputStruct);
+function OnInputHandler(param1, param2, param3)
+    local uiMsg = nil;
+    local key = nil;
+
+    if type(param1) == "table" then
+        if param1.GetMessageType then uiMsg = param1:GetMessageType(); end
+        if param1.GetKey then key = param1:GetKey(); end
+    elseif type(param1) == "number" then
+        uiMsg = param1;
+        key = param2;
     end
 
-    local uiMsg = pInputStruct:GetMessageType();
-    local key = pInputStruct:GetKey();
+    if uiMsg == nil or key == nil then
+        return false;
+    end
 
     -- **Inspired by CQUI. Credits to infixo.**
-    if key == Keys.VK_SHIFT then
+    if key == Keys.VK_SHIFT or key == 16 then
         m_IsShiftDown = (uiMsg == KeyEvents.KeyDown);
     end
 
     -- Close open panels on ESC
-    if key == Keys.VK_ESCAPE and uiMsg == KeyEvents.KeyUp then
+    if (key == Keys.VK_ESCAPE or key == 27) and uiMsg == KeyEvents.KeyUp then
         if LuaEvents.DMT_ClosePanels then
             LuaEvents.DMT_ClosePanels();
         end
@@ -211,13 +219,20 @@ function OnInputHandler(pInputStruct:table)
 
     -- Hotkey: SHIFT + A triggers DMT Smart Planner
     if (uiMsg == KeyEvents.KeyDown or uiMsg == KeyEvents.KeyUp) then
-        local isShift = m_IsShiftDown or (pInputStruct.IsShiftDown and pInputStruct:IsShiftDown());
+        local isShift = m_IsShiftDown;
+        if type(param1) == "table" and param1.IsShiftDown then
+            isShift = isShift or param1:IsShiftDown();
+        end
         local isKeyA = (key == Keys.A or key == 65 or (Keys.VK_A and key == Keys.VK_A));
         if isShift and isKeyA then
             print("DMT: Shift+A detected in MapPinManager, triggering Smart Planner!");
             LuaEvents.DMT_TriggerSmartPlannerHotkey();
             return true;
         end
+    end
+
+    if BASE_OnInputHandler then
+        pcall(BASE_OnInputHandler, param1, param2, param3);
     end
 
     return false;
