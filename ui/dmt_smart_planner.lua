@@ -220,8 +220,16 @@ local function IsEmpireDistrictAlreadyPlanned(baseDistrictType)
     return false;
 end
 
--- Rule 3: Canal Valid Geometry & 60-degree bend rule
--- Flat land, connects 2 water bodies or 1 water + 1 city center, no sharp bend <= 60 deg (endpoints cannot be adjacent)
+-- Rule 3: Canal Valid Geometry & Strict Civ 6 Engine Rules
+-- 1. Must be on flat land (not water, not hills, not mountain)
+-- 2. Must NOT create a three-way junction: in Civ 6, a Canal district is strictly forbidden
+--    from touching 3 or more connectable endpoints (water tiles or city center).
+--    It must connect EXACTLY 2 endpoints (#connectables == 2).
+-- 3. The 2 endpoints must be:
+--    - Water + Water (Coast/Lake to Coast/Lake)
+--    - Water + THIS City Center (cannot connect 2 cities)
+-- 4. No sharp hairpin bend: endpoints cannot be adjacent to each other (Map.GetPlotDistance >= 2)
+-- 5. Cannot connect to Rivers (rivers are hex borders, not water plots)
 local function IsValidCanalPosition(playerID, px, py, cityX, cityY)
     local plot = Map.GetPlot(px, py);
     if plot == nil or plot:IsWater() or plot:IsHills() or plot:IsMountain() then
@@ -234,45 +242,47 @@ local function IsValidCanalPosition(playerID, px, py, cityX, cityY)
     for _, adj in pairs(adjPlots) do
         if adj ~= nil then
             local isWater = adj:IsWater() and not adj:IsImpassable();
-            local isCity = adj:IsCity() or (adj:GetX() == cityX and adj:GetY() == cityY);
-            if isWater or isCity then
+            -- In Civ 6 Gathering Storm, districts cannot be placed adjacent to another city's center!
+            -- Only THIS city's center is a valid connectable city endpoint.
+            local isThisCity = (adj:GetX() == cityX and adj:GetY() == cityY);
+            if isWater or isThisCity then
                 table.insert(connectables, {
                     Plot = adj,
                     X = adj:GetX(),
                     Y = adj:GetY(),
                     IsWater = isWater,
-                    IsCity = isCity
+                    IsCity = isThisCity
                 });
             end
         end
     end
 
-    -- Must have at least 2 connectable endpoints
-    if #connectables < 2 then
+    -- Civ 6 Rule: "Three-way canals are not allowed."
+    -- If a tile is adjacent to 3 or more water/city endpoints, it forms an illegal 3-way junction.
+    -- A valid Canal must have EXACTLY 2 connectable endpoints!
+    if #connectables ~= 2 then
         return false;
     end
 
-    -- Find at least one valid pair (A, B)
-    for i = 1, #connectables - 1 do
-        for j = i + 1, #connectables do
-            local a = connectables[i];
-            local b = connectables[j];
+    local a = connectables[1];
+    local b = connectables[2];
 
-            -- Rule 3: Must connect 2 water bodies OR 1 water body + 1 City Center
-            local hasWater = a.IsWater or b.IsWater;
-            local validTypes = (a.IsWater or a.IsCity) and (b.IsWater or b.IsCity);
-
-            if hasWater and validTypes then
-                -- Rule 3: No sharp bend <= 60 degrees (A and B cannot be adjacent to each other)
-                local distBetweenEndpoints = Map.GetPlotDistance(a.X, a.Y, b.X, b.Y);
-                if distBetweenEndpoints >= 2 then
-                    return true;
-                end
-            end
-        end
+    -- Must connect: Water + Water OR Water + City Center
+    -- (Cannot connect City + City, and at least one side must be water)
+    local hasWater = a.IsWater or b.IsWater;
+    local isCityToCity = a.IsCity and b.IsCity;
+    if not hasWater or isCityToCity then
+        return false;
     end
 
-    return false;
+    -- Rule: Endpoints cannot be adjacent to each other (dist >= 2).
+    -- If they are adjacent (dist == 1), ships can already pass directly and Civ 6 forbids the hairpin turn.
+    local distBetweenEndpoints = Map.GetPlotDistance(a.X, a.Y, b.X, b.Y);
+    if distBetweenEndpoints < 2 then
+        return false;
+    end
+
+    return true;
 end
 
 -- Specialty vs Non-Specialty Districts (Pop Cap distinction)
