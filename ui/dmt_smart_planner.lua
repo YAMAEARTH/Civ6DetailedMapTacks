@@ -119,6 +119,49 @@ local function EnsureInstanceManagers()
     end
 end
 
+-- Fast lookup tables for all Civilization & Leader Unique Districts
+local KNOWN_UNIQUE_DISTRICTS = {
+    CIVILIZATION_GERMANY = { DISTRICT_INDUSTRIAL_ZONE = "DISTRICT_HANSA" },
+    CIVILIZATION_GAUL = { DISTRICT_INDUSTRIAL_ZONE = "DISTRICT_OPPIDUM" },
+    CIVILIZATION_KOREA = { DISTRICT_CAMPUS = "DISTRICT_SEOWON" },
+    CIVILIZATION_MAYA = { DISTRICT_CAMPUS = "DISTRICT_OBSERVATORY" },
+    CIVILIZATION_GREECE = { DISTRICT_THEATER = "DISTRICT_ACROPOLIS" },
+    CIVILIZATION_MALI = { DISTRICT_COMMERCIAL_HUB = "DISTRICT_SUGUBA" },
+    CIVILIZATION_VIETNAM = { DISTRICT_ENCAMPMENT = "DISTRICT_THANH" },
+    CIVILIZATION_ROME = { DISTRICT_AQUEDUCT = "DISTRICT_BATH" },
+    CIVILIZATION_KONGO = { DISTRICT_NEIGHBORHOOD = "DISTRICT_MBANZA" },
+    CIVILIZATION_RUSSIA = { DISTRICT_HOLY_SITE = "DISTRICT_LAVRA" },
+    CIVILIZATION_PHOENICIA = { DISTRICT_HARBOR = "DISTRICT_COTHON" },
+    CIVILIZATION_ENGLAND = { DISTRICT_HARBOR = "DISTRICT_ROYAL_NAVY_DOCKYARD" },
+    CIVILIZATION_BRAZIL = {
+        DISTRICT_ENTERTAINMENT_COMPLEX = "DISTRICT_STREET_CARNIVAL",
+        DISTRICT_WATER_ENTERTAINMENT_COMPLEX = "DISTRICT_WATER_STREET_CARNIVAL"
+    },
+    CIVILIZATION_BYZANTIUM = { DISTRICT_ENTERTAINMENT_COMPLEX = "DISTRICT_HIPPODROME" },
+    CIVILIZATION_ZULU = { DISTRICT_ENCAMPMENT = "DISTRICT_IKANDA" }
+};
+
+local REVERSE_UNIQUE_DISTRICTS = {
+    DISTRICT_HANSA = "DISTRICT_INDUSTRIAL_ZONE",
+    DISTRICT_OPPIDUM = "DISTRICT_INDUSTRIAL_ZONE",
+    DISTRICT_SEOWON = "DISTRICT_CAMPUS",
+    DISTRICT_OBSERVATORY = "DISTRICT_CAMPUS",
+    DISTRICT_ACROPOLIS = "DISTRICT_THEATER",
+    DISTRICT_SUGUBA = "DISTRICT_COMMERCIAL_HUB",
+    DISTRICT_SUK_FLOATINGMARKET = "DISTRICT_COMMERCIAL_HUB",
+    DISTRICT_THANH = "DISTRICT_ENCAMPMENT",
+    DISTRICT_IKANDA = "DISTRICT_ENCAMPMENT",
+    DISTRICT_BATH = "DISTRICT_AQUEDUCT",
+    DISTRICT_MBANZA = "DISTRICT_NEIGHBORHOOD",
+    DISTRICT_HAG_MADAGASCAR_FOKO = "DISTRICT_NEIGHBORHOOD",
+    DISTRICT_LAVRA = "DISTRICT_HOLY_SITE",
+    DISTRICT_COTHON = "DISTRICT_HARBOR",
+    DISTRICT_ROYAL_NAVY_DOCKYARD = "DISTRICT_HARBOR",
+    DISTRICT_STREET_CARNIVAL = "DISTRICT_ENTERTAINMENT_COMPLEX",
+    DISTRICT_HIPPODROME = "DISTRICT_ENTERTAINMENT_COMPLEX",
+    DISTRICT_WATER_STREET_CARNIVAL = "DISTRICT_WATER_ENTERTAINMENT_COMPLEX"
+};
+
 -- Get unique district replacement for local player
 function GetPlayerUniqueDistrict(playerID, baseDistrictType)
     if not baseDistrictType or not GameInfo.Districts[baseDistrictType] then
@@ -130,18 +173,32 @@ function GetPlayerUniqueDistrict(playerID, baseDistrictType)
     local civType = playerConfig:GetCivilizationTypeName();
     local leaderType = playerConfig:GetLeaderTypeName();
 
-    for row in GameInfo.DistrictReplaces() do
-        if row.ReplacesDistrictType == baseDistrictType then
-            local uniqueDistrict = GameInfo.Districts[row.CivUniqueDistrictType];
-            if uniqueDistrict and uniqueDistrict.TraitType then
-                for civTrait in GameInfo.CivilizationTraits() do
-                    if civTrait.CivilizationType == civType and civTrait.TraitType == uniqueDistrict.TraitType then
-                        return row.CivUniqueDistrictType;
+    -- Check known mappings first for rapid zero-overhead lookup
+    if civType and KNOWN_UNIQUE_DISTRICTS[civType] and KNOWN_UNIQUE_DISTRICTS[civType][baseDistrictType] then
+        local uType = KNOWN_UNIQUE_DISTRICTS[civType][baseDistrictType];
+        if GameInfo.Districts[uType] ~= nil then
+            return uType;
+        end
+    end
+
+    if GameInfo.DistrictReplaces ~= nil then
+        for row in GameInfo.DistrictReplaces() do
+            if row.ReplacesDistrictType == baseDistrictType then
+                local uniqueDistrict = GameInfo.Districts[row.CivUniqueDistrictType];
+                if uniqueDistrict and uniqueDistrict.TraitType then
+                    if GameInfo.CivilizationTraits ~= nil then
+                        for civTrait in GameInfo.CivilizationTraits() do
+                            if civTrait.CivilizationType == civType and civTrait.TraitType == uniqueDistrict.TraitType then
+                                return row.CivUniqueDistrictType;
+                            end
+                        end
                     end
-                end
-                for leaderTrait in GameInfo.LeaderTraits() do
-                    if leaderTrait.LeaderType == leaderType and leaderTrait.TraitType == uniqueDistrict.TraitType then
-                        return row.CivUniqueDistrictType;
+                    if GameInfo.LeaderTraits ~= nil then
+                        for leaderTrait in GameInfo.LeaderTraits() do
+                            if leaderTrait.LeaderType == leaderType and leaderTrait.TraitType == uniqueDistrict.TraitType then
+                                return row.CivUniqueDistrictType;
+                            end
+                        end
                     end
                 end
             end
@@ -153,7 +210,10 @@ end
 -- Get base district type if given a unique district type
 function GetBaseDistrictType(districtType)
     if districtType == nil then return nil; end
-    if GameInfo.DistrictReplaces then
+    if REVERSE_UNIQUE_DISTRICTS[districtType] ~= nil then
+        return REVERSE_UNIQUE_DISTRICTS[districtType];
+    end
+    if GameInfo.DistrictReplaces ~= nil then
         for row in GameInfo.DistrictReplaces() do
             if row.CivUniqueDistrictType == districtType then
                 return row.ReplacesDistrictType;
@@ -296,9 +356,13 @@ local NON_SPECIALTY_DISTRICTS = {
     DISTRICT_CANAL = true,
     DISTRICT_NEIGHBORHOOD = true,
     DISTRICT_MBANZA = true,
+    DISTRICT_THANH = true, -- Vietnam unique Encampment: RequiresPopulation = false (free of Pop cap!)
     DISTRICT_SPACEPORT = true,
     DISTRICT_GOVERNMENT = true,
-    DISTRICT_DIPLOMATIC_QUARTER = true
+    DISTRICT_DIPLOMATIC_QUARTER = true,
+    DISTRICT_HAG_MADAGASCAR_FOKO = true,
+    DISTRICT_WONDER = true,
+    DISTRICT_CITY_CENTER = true
 };
 
 local function IsSpecialtyDistrict(districtType, baseDistrictType)
@@ -490,38 +554,92 @@ local function IsValidVietnamFeature(plot)
     return false;
 end
 
+-- Safe Aqueduct Position Checker (checks engine function if present, with bulletproof standalone fallback)
+local function SafeIsValidAqueductPosition(playerID, px, py, cityX, cityY)
+    if IsValidAqueductPosition ~= nil then
+        local pcallOk, res = pcall(function() return IsValidAqueductPosition(playerID, px, py); end);
+        if pcallOk and res ~= nil then return res; end
+    end
+    local plot = Map.GetPlot(px, py);
+    if plot == nil or plot:IsWater() or plot:IsMountain() then return false; end
+    if cityX ~= nil and cityY ~= nil then
+        if Map.GetPlotDistance(cityX, cityY, px, py) ~= 1 then return false; end
+    end
+    for _, adj in pairs(Map.GetAdjacentPlots(px, py)) do
+        if adj ~= nil then
+            if not (cityX ~= nil and adj:GetX() == cityX and adj:GetY() == cityY) then
+                if plot:IsRiver() and plot:IsRiverCrossingToPlot(adj) then
+                    return true;
+                elseif adj:IsLake() or adj:IsMountain() then
+                    return true;
+                elseif adj:GetFeatureType() ~= -1 and GameInfo.Features[adj:GetFeatureType()] and GameInfo.Features[adj:GetFeatureType()].FeatureType == "FEATURE_OASIS" then
+                    return true;
+                end
+            end
+        end
+    end
+    return false;
+end
+
+-- Safe Dam Position Checker
+local function SafeIsValidDamPosition(playerID, px, py)
+    if IsValidDamPosition ~= nil then
+        local pcallOk, res = pcall(function() return IsValidDamPosition(playerID, px, py); end);
+        if pcallOk and res ~= nil then return res; end
+    end
+    local plot = Map.GetPlot(px, py);
+    if plot == nil then return false; end
+    return IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py);
+end
+
 -- Rule 5: Priority score calculation for sorting build sequence
 local function CalculateDistrictPriority(item, cityHasFreshWater)
     local baseType = item.BaseDistrictType;
+    local distType = item.DistrictType;
     local num = item.NumericBonus or 0;
     local score = 50;
 
     if baseType == "DISTRICT_CAMPUS" then
         score = 92 + num * 4;
+        if distType == "DISTRICT_SEOWON" then score = 96 + num * 2; end
     elseif baseType == "DISTRICT_COMMERCIAL_HUB" or baseType == "DISTRICT_HARBOR" then
         score = 88 + num * 3;
+        if distType == "DISTRICT_SUGUBA" then score = 92 + num * 3; end
     elseif baseType == "DISTRICT_GOVERNMENT" then
         score = 87; -- High priority non-specialty hub boosting all surrounding districts
     elseif baseType == "DISTRICT_HOLY_SITE" then
         score = 86 + num * 3;
+        if distType == "DISTRICT_LAVRA" then score = 90 + num * 3; end
     elseif baseType == "DISTRICT_AQUEDUCT" then
         score = not cityHasFreshWater and 87 or 74;
+        if distType == "DISTRICT_BATH" then score = score + 5; end
     elseif baseType == "DISTRICT_INDUSTRIAL_ZONE" then
         score = 85 + num * 3;
+        if distType == "DISTRICT_HANSA" or distType == "DISTRICT_OPPIDUM" then
+            score = 91 + num * 3;
+        end
     elseif baseType == "DISTRICT_DAM" then
         score = 78;
     elseif baseType == "DISTRICT_DIPLOMATIC_QUARTER" then
         score = 76; -- Non-specialty 1-per-empire envoy boost
     elseif baseType == "DISTRICT_ENCAMPMENT" then
-        score = 72;
+        if distType == "DISTRICT_THANH" then
+            score = 80 + num * 2; -- Vietnam Thành is Non-Specialty (free of Pop cap!)
+        else
+            score = 72;
+        end
     elseif baseType == "DISTRICT_ENTERTAINMENT_COMPLEX" then
         score = 70;
     elseif baseType == "DISTRICT_THEATER" then
         score = 68 + num * 2;
+        if distType == "DISTRICT_ACROPOLIS" then score = 75 + num * 2; end
+    elseif baseType == "DISTRICT_PRESERVE" then
+        score = 65 + num * 2;
     elseif baseType == "DISTRICT_CANAL" then
         score = 55;
     elseif baseType == "DISTRICT_NEIGHBORHOOD" then
         score = 45;
+        if distType == "DISTRICT_MBANZA" then score = 56; end
     elseif baseType == "DISTRICT_AERODROME" then
         score = 35;
     elseif baseType == "DISTRICT_SPACEPORT" then
@@ -891,6 +1009,223 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
         if cannibalizedTilesCount >= 5 then
             score = score - (cannibalizedTilesCount * 3);
             table.insert(reasons, string.format("ทับซ้อนพื้นที่เมืองเดิม %d ช่อง (-%d)", cannibalizedTilesCount, cannibalizedTilesCount * 3));
+        end
+    end
+
+    -- 4.5 District Potential & Specialized Civilization Forensics
+    -- A. Aqueduct + Dam + Industrial Zone Golden Combo Detection
+    local candidateAQPlots = {};
+    local candidateDamPlots = {};
+
+    -- Scan Ring 1 for Aqueduct
+    for _, p1 in pairs(ring1Plots) do
+        if p1 ~= nil and not p1:IsWater() and not p1:IsMountain() and not p1:IsImpassable() then
+            if not HasForbiddenResourceForDistrict(playerID, p1) then
+                if SafeIsValidAqueductPosition(playerID, p1:GetX(), p1:GetY(), px, py) then
+                    table.insert(candidateAQPlots, p1);
+                end
+            end
+        end
+    end
+
+    -- Scan Rings 1 & 2 for Dam
+    for _, pDam in ipairs(allWithin2) do
+        local d = Map.GetPlotDistance(px, py, pDam:GetX(), pDam:GetY());
+        if d >= 1 and d <= 2 and not pDam:IsWater() and not pDam:IsImpassable() then
+            if not HasForbiddenResourceForDistrict(playerID, pDam) then
+                if IsValidRiverFloodplainForDam(pDam) and not IsDamAlreadyOnRiver(playerID, pDam:GetX(), pDam:GetY()) then
+                    table.insert(candidateDamPlots, pDam);
+                end
+            end
+        end
+    end
+
+    local hasGoldenTripleCombo = false;
+    local hasAqueductIZPair = false;
+
+    if #candidateAQPlots > 0 and #candidateDamPlots > 0 then
+        -- Check if any workable plot touches BOTH an Aqueduct candidate and a Dam candidate
+        for _, pMid in ipairs(allWithin2) do
+            local midX, midY = pMid:GetX(), pMid:GetY();
+            local d = Map.GetPlotDistance(px, py, midX, midY);
+            if d >= 1 and d <= 3 and not pMid:IsWater() and not pMid:IsMountain() and not pMid:IsImpassable() then
+                if not HasForbiddenResourceForDistrict(playerID, pMid) then
+                    local touchesAQ = false;
+                    local touchesDam = false;
+                    for _, aq in ipairs(candidateAQPlots) do
+                        if Map.GetPlotDistance(midX, midY, aq:GetX(), aq:GetY()) == 1 and (midX ~= aq:GetX() or midY ~= aq:GetY()) then
+                            touchesAQ = true;
+                            break;
+                        end
+                    end
+                    for _, dm in ipairs(candidateDamPlots) do
+                        if Map.GetPlotDistance(midX, midY, dm:GetX(), dm:GetY()) == 1 and (midX ~= dm:GetX() or midY ~= dm:GetY()) then
+                            touchesDam = true;
+                            break;
+                        end
+                    end
+                    if touchesAQ and touchesDam then
+                        hasGoldenTripleCombo = true;
+                        break;
+                    end
+                end
+            end
+        end
+    end
+
+    if not hasGoldenTripleCombo and #candidateAQPlots > 0 then
+        -- Check if any workable plot can pair with Aqueduct for IZ (+2 Production)
+        for _, aq in ipairs(candidateAQPlots) do
+            for _, adj in pairs(Map.GetAdjacentPlots(aq:GetX(), aq:GetY())) do
+                local ax, ay = adj:GetX(), adj:GetY();
+                local d = Map.GetPlotDistance(px, py, ax, ay);
+                if d >= 1 and d <= 3 and not (ax == px and ay == py) and not adj:IsWater() and not adj:IsMountain() and not adj:IsImpassable() then
+                    if not HasForbiddenResourceForDistrict(playerID, adj) then
+                        hasAqueductIZPair = true;
+                        break;
+                    end
+                end
+            end
+            if hasAqueductIZPair then break; end
+        end
+    end
+
+    if hasGoldenTripleCombo then
+        score = score + 26;
+        table.insert(reasons, "สุดยอดคอมโบทองคำ เขื่อน + ส่งน้ำ + โรงงาน (+26)");
+    elseif hasAqueductIZPair then
+        score = score + 12;
+        table.insert(reasons, "มีคอมโบ ส่งน้ำ + โรงงาน (+12)");
+    end
+
+    -- B. Science District Potential (Campus / Seowon / Observatory)
+    local playerCivType = playerCfg and playerCfg:GetCivilizationTypeName() or "";
+    local isKoreaCiv = (playerCivType == "CIVILIZATION_KOREA");
+    local isMayaCiv = (playerCivType == "CIVILIZATION_MAYA");
+    local isVietnamCiv = (playerCivType == "CIVILIZATION_VIETNAM");
+
+    if isKoreaCiv then
+        -- Korea: Seowon must be on Hills and should be in Ring 2 isolated from City Center
+        local bestSeowonPlot = nil;
+        local hasWorkableHills = false;
+        for _, p2 in ipairs(allWithin2) do
+            local d = Map.GetPlotDistance(px, py, p2:GetX(), p2:GetY());
+            if d >= 1 and d <= 2 and p2:IsHills() and not p2:IsWater() and not p2:IsMountain() and not p2:IsImpassable() then
+                hasWorkableHills = true;
+                if not HasForbiddenResourceForDistrict(playerID, p2) then
+                    if d == 2 then
+                        bestSeowonPlot = p2;
+                        break;
+                    end
+                end
+            end
+        end
+        if bestSeowonPlot ~= nil then
+            score = score + 14;
+            table.insert(reasons, "มีเนินเขาวง 2 ชั้นยอดสำหรับ Seowon (+14)");
+        elseif hasWorkableHills then
+            score = score + 6;
+            table.insert(reasons, "มีเนินเขาสำหรับ Seowon (+6)");
+        else
+            score = score - 20;
+            table.insert(reasons, "เกาหลีแต่ไร้เนินเขาสำหรับสร้าง Seowon (-20)");
+        end
+
+    elseif isMayaCiv then
+        -- Maya: Observatory gets +2 from Plantations, +0.5 from Farms
+        local plantationCount = 0;
+        local flatFarmableCount = 0;
+        for _, p2 in ipairs(allWithin2) do
+            local d = Map.GetPlotDistance(px, py, p2:GetX(), p2:GetY());
+            if d >= 1 and d <= 2 and not p2:IsWater() and not p2:IsMountain() and not p2:IsImpassable() then
+                local rIdx = p2:GetResourceType();
+                if rIdx ~= -1 then
+                    local rInfo = GameInfo.Resources[rIdx];
+                    if rInfo ~= nil then
+                        local rType = rInfo.ResourceType;
+                        if rType == "RESOURCE_BANANAS" or rType == "RESOURCE_CITRUS" or rType == "RESOURCE_COCOA" or
+                           rType == "RESOURCE_COFFEE" or rType == "RESOURCE_COTTON" or rType == "RESOURCE_DYES" or
+                           rType == "RESOURCE_SILK" or rType == "RESOURCE_SPICES" or rType == "RESOURCE_SUGAR" or
+                           rType == "RESOURCE_TEA" or rType == "RESOURCE_TOBACCO" then
+                            plantationCount = plantationCount + 1;
+                        end
+                    end
+                elseif not p2:IsHills() and not HasForbiddenResourceForDistrict(playerID, p2) then
+                    flatFarmableCount = flatFarmableCount + 1;
+                end
+            end
+        end
+        if plantationCount >= 2 then
+            score = score + 16;
+            table.insert(reasons, string.format("แปลงเพาะปลูก %d จุดสำหรับ Observatory (+16)", plantationCount));
+        elseif plantationCount == 1 then
+            score = score + 10;
+            table.insert(reasons, "มีแปลงเพาะปลูกสำหรับ Observatory (+10)");
+        elseif flatFarmableCount >= 4 then
+            score = score + 6;
+            table.insert(reasons, "พื้นที่เกษตรกรรมกลุ่มสำหรับ Observatory (+6)");
+        end
+
+    else
+        -- Standard Campus: Mountains, Reefs, Geothermal Fissures
+        local bestCampusAdjacency = 0;
+        for _, pCamp in ipairs(allWithin2) do
+            local d = Map.GetPlotDistance(px, py, pCamp:GetX(), pCamp:GetY());
+            if d >= 1 and d <= 2 and not pCamp:IsWater() and not pCamp:IsMountain() and not pCamp:IsImpassable() then
+                if not HasForbiddenResourceForDistrict(playerID, pCamp) then
+                    local adjSci = 0;
+                    for _, adj in pairs(Map.GetAdjacentPlots(pCamp:GetX(), pCamp:GetY())) do
+                        if adj:IsMountain() then adjSci = adjSci + 1; end
+                        local fIdx = adj:GetFeatureType();
+                        if fIdx ~= -1 and GameInfo.Features[fIdx] ~= nil then
+                            local fType = GameInfo.Features[fIdx].FeatureType;
+                            if fType == "FEATURE_GEOTHERMAL_FISSURE" or fType == "FEATURE_REEF" then
+                                adjSci = adjSci + 2;
+                            elseif fType == "FEATURE_JUNGLE" then
+                                adjSci = adjSci + 0.5;
+                            end
+                        end
+                    end
+                    if adjSci > bestCampusAdjacency then
+                        bestCampusAdjacency = adjSci;
+                    end
+                end
+            end
+        end
+        if bestCampusAdjacency >= 4 then
+            score = score + 16;
+            table.insert(reasons, string.format("จุดสร้าง Campus ระดับเทพ (+%d Sci) (+16)", math.floor(bestCampusAdjacency)));
+        elseif bestCampusAdjacency >= 3 then
+            score = score + 10;
+            table.insert(reasons, string.format("จุดสร้าง Campus ชั้นยอด (+%d Sci) (+10)", math.floor(bestCampusAdjacency)));
+        elseif bestCampusAdjacency >= 2 then
+            score = score + 5;
+            table.insert(reasons, string.format("จุดสร้าง Campus มาตรฐาน (+%d Sci) (+5)", math.floor(bestCampusAdjacency)));
+        end
+    end
+
+    -- C. Vietnam Feature Forensics
+    if isVietnamCiv then
+        local vietnamFeatureCount = 0;
+        for _, p2 in ipairs(allWithin2) do
+            local d = Map.GetPlotDistance(px, py, p2:GetX(), p2:GetY());
+            if d >= 1 and d <= 2 and not p2:IsWater() and not p2:IsMountain() and not p2:IsImpassable() then
+                if not HasForbiddenResourceForDistrict(playerID, p2) then
+                    if IsValidVietnamFeature(p2) then
+                        vietnamFeatureCount = vietnamFeatureCount + 1;
+                    end
+                end
+            end
+        end
+        if vietnamFeatureCount == 0 then
+            score = score - 70;
+            table.insert(reasons, "วิกฤตเวียดนาม: ไร้ป่า/หนองน้ำสำหรับสร้างเขตพิเศษ (-70)");
+        elseif vietnamFeatureCount == 1 then
+            score = score - 35;
+            table.insert(reasons, "เวียดนาม: มีป่า/หนองน้ำเพียง 1 ช่อง ไม่พอผังเขต (-35)");
+        elseif vietnamFeatureCount >= 4 then
+            score = score + 15;
+            table.insert(reasons, string.format("เวียดนาม: ป่าและหนองน้ำ %d ช่อง อุดมสมบูรณ์สำหรับผังเขต (+15)", vietnamFeatureCount));
         end
     end
 
@@ -1533,6 +1868,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     local distNeighborhood  = GetPlayerUniqueDistrict(playerID, "DISTRICT_NEIGHBORHOOD");
     local distAerodrome     = GetPlayerUniqueDistrict(playerID, "DISTRICT_AERODROME");
     local distSpaceport     = GetPlayerUniqueDistrict(playerID, "DISTRICT_SPACEPORT");
+    local distPreserve      = GetPlayerUniqueDistrict(playerID, "DISTRICT_PRESERVE");
 
     -- Rule 4: Civilization and Unique District Detection
     local playerConfig = PlayerConfigurations[playerID];
@@ -1543,6 +1879,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     local isKongo = (civType == "CIVILIZATION_KONGO" or distNeighborhood == "DISTRICT_MBANZA");
     local isGermany = (civType == "CIVILIZATION_GERMANY" or distIZ == "DISTRICT_HANSA");
     local isRome = (civType == "CIVILIZATION_ROME" or distAqueduct == "DISTRICT_BATH");
+    local isMaya = (civType == "CIVILIZATION_MAYA" or distCampus == "DISTRICT_OBSERVATORY");
+    local isGreece = (civType == "CIVILIZATION_GREECE" or distTheater == "DISTRICT_ACROPOLIS");
+    local isMali = (civType == "CIVILIZATION_MALI" or distCommHub == "DISTRICT_SUGUBA");
     local cityPlot = Map.GetPlot(cityX, cityY);
     local cityHasFreshWater = (cityPlot ~= nil) and cityPlot:IsFreshWater();
 
@@ -1654,7 +1993,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             local dInfo = GameInfo.Districts[dTypeName];
             if dInfo ~= nil then
                 local bIsSpec = false;
-                if dInfo.RequiresPopulation == true or dInfo.RequiresPopulation == 1 or specialtyBaseTypes[baseType] then
+                if dTypeName == "DISTRICT_THANH" then
+                    bIsSpec = false; -- Vietnam Thành is Non-Specialty (free of Pop cap!)
+                elseif dInfo.RequiresPopulation == true or dInfo.RequiresPopulation == 1 or specialtyBaseTypes[baseType] then
                     bIsSpec = true;
                     existingSpecialtyCount = existingSpecialtyCount + 1;
                 end
@@ -1701,7 +2042,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
-                if IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
+                if IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py) and SafeIsValidDamPosition(playerID, px, py) then
                     local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
 
                     -- Check distance to all OTHER cities on map (strictly excluding this city!)
@@ -1757,7 +2098,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                             local ax, ay = adj:GetX(), adj:GetY();
                             if Map.GetPlotDistance(cityX, cityY, ax, ay) == 1 then
                                 if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
-                                    if IsValidAqueductPosition(playerID, ax, ay) then
+                                    if SafeIsValidAqueductPosition(playerID, ax, ay, cityX, cityY) then
                                         canTouchAqueduct = true;
                                     end
                                 end
@@ -1799,7 +2140,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
-                if Map.GetPlotDistance(cityX, cityY, px, py) == 1 and IsValidAqueductPosition(playerID, px, py) then
+                if Map.GetPlotDistance(cityX, cityY, px, py) == 1 and SafeIsValidAqueductPosition(playerID, px, py, cityX, cityY) then
                     table.insert(validAqueductPlots, plot);
                 end
             end
@@ -1852,7 +2193,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                         bestAqueduct = plot;
                     end
                 end
-                aqueductYieldBonus = "+2 Housing, +1 Amenity";
+                aqueductYieldBonus = "+2 Housing, +1 Amenity (อ่างอาบน้ำโรมัน)";
 
             else
                 -- Case 3: City ALREADY has fresh water -> ONLY build Aqueduct if it boosts Industrial Zone!
@@ -1986,42 +2327,81 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveCanalPlot = bestCanal or GetExistingDistrictPlot("DISTRICT_CANAL");
 
-    -- Step D: Industrial Zone (Specialty) - Rule 4: Gaul Oppidum cannot be adjacent to City Center!
+    -- Step D: Industrial Zone (Specialty) - Unique Districts: Hansa (Germany), Oppidum (Gaul)
     local bestIZ = nil;
     if not CityHasDistrict("DISTRICT_INDUSTRIAL_ZONE") and GameInfo.Districts[distIZ] ~= nil then
         local bestIZScore = -1;
+        local isHansa = (isGermany or distIZ == "DISTRICT_HANSA");
+        local isOppidum = (isGaul or distIZ == "DISTRICT_OPPIDUM");
+
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
-            local bGaulValid = (not isGaul) or (distFromCity >= 2);
+            -- Gaul Oppidum rule: Strictly forbidden adjacent to City Center (dist >= 2)!
+            local bGaulValid = (not isOppidum) or (distFromCity >= 2);
 
             if bGaulValid and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distIZ, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local izScore = 0;
                     local adjPlots = Map.GetAdjacentPlots(px, py);
-                    for _, adj in pairs(adjPlots) do
-                        if effectiveAqueductPlot and adj:GetIndex() == effectiveAqueductPlot:GetIndex() then
-                            izScore = izScore + 2;
+
+                    if isHansa then
+                        -- Hansa (Germany): +2 Aqueduct, Dam, Canal, Commercial Hub; +1 per adjacent Resource!
+                        for _, adj in pairs(adjPlots) do
+                            local adjIdx = adj:GetIndex();
+                            if effectiveAqueductPlot and adjIdx == effectiveAqueductPlot:GetIndex() then izScore = izScore + 2; end
+                            if effectiveDamPlot and adjIdx == effectiveDamPlot:GetIndex() then izScore = izScore + 2; end
+                            if effectiveCanalPlot and adjIdx == effectiveCanalPlot:GetIndex() then izScore = izScore + 2; end
+                            if (effectiveCommHubPlot and adjIdx == effectiveCommHubPlot:GetIndex()) or (adj:GetDistrictType() ~= -1 and (GameInfo.Districts[adj:GetDistrictType()].DistrictType == "DISTRICT_COMMERCIAL_HUB" or GameInfo.Districts[adj:GetDistrictType()].DistrictType == "DISTRICT_SUGUBA")) then
+                                izScore = izScore + 2;
+                            end
+                            local rIdx = adj:GetResourceType();
+                            if rIdx ~= -1 then
+                                izScore = izScore + 1; -- +1 per adjacent Resource of ANY kind!
+                            end
+                            if assignedPlots[adjIdx] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
+                                izScore = izScore + 0.5;
+                            end
                         end
-                        if effectiveDamPlot and adj:GetIndex() == effectiveDamPlot:GetIndex() then
-                            izScore = izScore + 2;
+                    elseif isOppidum then
+                        -- Oppidum (Gaul): +2 per Strategic Resource, +2 per Quarry, +0.5 per District
+                        for _, adj in pairs(adjPlots) do
+                            local rIdx = adj:GetResourceType();
+                            if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                                izScore = izScore + 2;
+                            end
+                            local impIdx = adj:GetImprovementType();
+                            if impIdx ~= -1 and GameInfo.Improvements[impIdx] and GameInfo.Improvements[impIdx].ImprovementType == "IMPROVEMENT_QUARRY" then
+                                izScore = izScore + 2;
+                            elseif rIdx ~= -1 and GameInfo.Resources[rIdx] and (GameInfo.Resources[rIdx].ResourceType == "RESOURCE_STONE" or GameInfo.Resources[rIdx].ResourceType == "RESOURCE_GYPSUM" or GameInfo.Resources[rIdx].ResourceType == "RESOURCE_MARBLE") then
+                                izScore = izScore + 2;
+                            end
+                            if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
+                                izScore = izScore + 0.5;
+                            end
                         end
-                        if effectiveCanalPlot and adj:GetIndex() == effectiveCanalPlot:GetIndex() then
-                            izScore = izScore + 2;
-                        end
-                        local rIdx = adj:GetResourceType();
-                        if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
-                            izScore = izScore + 1;
-                        end
-                        local tIdx = adj:GetTerrainType();
-                        if tIdx ~= -1 and GameInfo.Terrains[tIdx] and GameInfo.Terrains[tIdx].Hills then
-                            izScore = izScore + 0.5;
-                        end
-                        if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
-                            izScore = izScore + 0.5;
+                    else
+                        -- Standard Industrial Zone: +2 Aqueduct/Dam/Canal, +1 Strategic, +0.5 Mine/Quarry, +0.5 District
+                        for _, adj in pairs(adjPlots) do
+                            local adjIdx = adj:GetIndex();
+                            if effectiveAqueductPlot and adjIdx == effectiveAqueductPlot:GetIndex() then izScore = izScore + 2; end
+                            if effectiveDamPlot and adjIdx == effectiveDamPlot:GetIndex() then izScore = izScore + 2; end
+                            if effectiveCanalPlot and adjIdx == effectiveCanalPlot:GetIndex() then izScore = izScore + 2; end
+                            local rIdx = adj:GetResourceType();
+                            if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                                izScore = izScore + 1;
+                            end
+                            local tIdx = adj:GetTerrainType();
+                            if tIdx ~= -1 and GameInfo.Terrains[tIdx] and GameInfo.Terrains[tIdx].Hills then
+                                izScore = izScore + 0.5;
+                            end
+                            if assignedPlots[adjIdx] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
+                                izScore = izScore + 0.5;
+                            end
                         end
                     end
+
                     if izScore > bestIZScore then
                         bestIZScore = izScore;
                         bestIZ = plot;
@@ -2032,12 +2412,18 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         if bestIZ ~= nil then
             assignedPlots[bestIZ:GetIndex()] = true;
             local izBonus = math.max(1, math.floor(bestIZScore + 0.5));
+            local yieldText = "+" .. izBonus .. " [ICON_Production] Prod";
+            if isHansa then
+                yieldText = "+" .. izBonus .. " [ICON_Production] Prod (Hansa โบนัสแร่+เขต)";
+            elseif isOppidum then
+                yieldText = "+" .. izBonus .. " [ICON_Production] Prod (Oppidum แร่ยุทธศาสตร์)";
+            end
             table.insert(plannedDistricts, {
                 Plot = bestIZ,
                 DistrictType = distIZ,
                 BaseDistrictType = "DISTRICT_INDUSTRIAL_ZONE",
                 BaseName = Locale.Lookup(GameInfo.Districts[distIZ].Name),
-                YieldBonus = "+" .. izBonus .. " [ICON_Production] Prod",
+                YieldBonus = yieldText,
                 NumericBonus = izBonus,
                 IsSpecialty = true
             });
@@ -2045,10 +2431,13 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveIZPlot = bestIZ or GetExistingDistrictPlot("DISTRICT_INDUSTRIAL_ZONE");
 
-    -- Step E: Harbor (Specialty)
+    -- Step E: Harbor (Specialty) - Unique Districts: Cothon (Phoenicia), Royal Navy Dockyard (England)
     local bestHarbor = nil;
     if not CityHasDistrict("DISTRICT_HARBOR") and GameInfo.Districts[distHarbor] ~= nil then
         local bestHarborScore = -1;
+        local isCothon = (distHarbor == "DISTRICT_COTHON");
+        local isRND = (distHarbor == "DISTRICT_ROYAL_NAVY_DOCKYARD");
+
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, true) and plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
@@ -2077,12 +2466,18 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         if bestHarbor ~= nil then
             assignedPlots[bestHarbor:GetIndex()] = true;
             local hBonus = math.max(2, math.floor(bestHarborScore + 0.5));
+            local yieldText = "+" .. hBonus .. " [ICON_Gold] Gold";
+            if isCothon then
+                yieldText = "+" .. hBonus .. " [ICON_Gold] Gold & +50% Naval/Settler";
+            elseif isRND then
+                yieldText = "+" .. hBonus .. " [ICON_Gold] Gold & +4 Ship Move";
+            end
             table.insert(plannedDistricts, {
                 Plot = bestHarbor,
                 DistrictType = distHarbor,
                 BaseDistrictType = "DISTRICT_HARBOR",
                 BaseName = Locale.Lookup(GameInfo.Districts[distHarbor].Name),
-                YieldBonus = "+" .. hBonus .. " [ICON_Gold] Gold",
+                YieldBonus = yieldText,
                 NumericBonus = hBonus,
                 IsSpecialty = true
             });
@@ -2090,10 +2485,12 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveHarborPlot = bestHarbor or GetExistingDistrictPlot("DISTRICT_HARBOR");
 
-    -- Step F: Commercial Hub (Specialty)
+    -- Step F: Commercial Hub (Specialty) - Unique District: Suguba (Mali)
     local bestCommHub = nil;
     if not CityHasDistrict("DISTRICT_COMMERCIAL_HUB") and GameInfo.Districts[distCommHub] ~= nil then
         local bestCHScore = -1;
+        local isSuguba = (isMali or distCommHub == "DISTRICT_SUGUBA");
+
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
@@ -2102,14 +2499,30 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                     local chScore = 0;
                     if plot:IsRiver() then chScore = chScore + 2; end
                     local adjPlots = Map.GetAdjacentPlots(px, py);
-                    for _, adj in pairs(adjPlots) do
-                        if effectiveHarborPlot and adj:GetIndex() == effectiveHarborPlot:GetIndex() then
-                            chScore = chScore + 2;
+
+                    if isSuguba then
+                        -- Suguba (Mali): +2 River, +2 Holy Site/Lavra, +1 per adjacent District!
+                        for _, adj in pairs(adjPlots) do
+                            local adjIdx = adj:GetIndex();
+                            if (effectiveHolySitePlot and adjIdx == effectiveHolySitePlot:GetIndex()) or (adj:GetDistrictType() ~= -1 and (GameInfo.Districts[adj:GetDistrictType()].DistrictType == "DISTRICT_HOLY_SITE" or GameInfo.Districts[adj:GetDistrictType()].DistrictType == "DISTRICT_LAVRA")) then
+                                chScore = chScore + 2;
+                            end
+                            if assignedPlots[adjIdx] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
+                                chScore = chScore + 1; -- Major +1 per adjacent district!
+                            end
                         end
-                        if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
-                            chScore = chScore + 0.5;
+                    else
+                        -- Standard Commercial Hub: +2 River, +2 Harbor, +0.5 District
+                        for _, adj in pairs(adjPlots) do
+                            if effectiveHarborPlot and adj:GetIndex() == effectiveHarborPlot:GetIndex() then
+                                chScore = chScore + 2;
+                            end
+                            if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
+                                chScore = chScore + 0.5;
+                            end
                         end
                     end
+
                     if chScore > bestCHScore then
                         bestCHScore = chScore;
                         bestCommHub = plot;
@@ -2120,12 +2533,16 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         if bestCommHub ~= nil then
             assignedPlots[bestCommHub:GetIndex()] = true;
             local chBonus = math.max(2, math.floor(bestCHScore + 0.5));
+            local yieldText = "+" .. chBonus .. " [ICON_Gold] Gold";
+            if isSuguba then
+                yieldText = "+" .. chBonus .. " [ICON_Gold] Gold (Suguba ริมแม่น้ำ+ศาสนา)";
+            end
             table.insert(plannedDistricts, {
                 Plot = bestCommHub,
                 DistrictType = distCommHub,
                 BaseDistrictType = "DISTRICT_COMMERCIAL_HUB",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCommHub].Name),
-                YieldBonus = "+" .. chBonus .. " [ICON_Gold] Gold",
+                YieldBonus = yieldText,
                 NumericBonus = chBonus,
                 IsSpecialty = true
             });
@@ -2133,35 +2550,68 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveCommHubPlot = bestCommHub or GetExistingDistrictPlot("DISTRICT_COMMERCIAL_HUB");
 
-    -- Step G: Campus (Specialty) - Rule 4: Korea Seowon on Hills & isolated from districts!
+    -- Step G: Campus (Specialty) - Unique Districts: Seowon (Korea), Observatory (Maya)
     local bestCampus = nil;
     if not CityHasDistrict("DISTRICT_CAMPUS") and GameInfo.Districts[distCampus] ~= nil then
         local bestCampusScore = -1;
+        local isSeowon = (isKorea or distCampus == "DISTRICT_SEOWON");
+        local isObs = (isMaya or distCampus == "DISTRICT_OBSERVATORY");
+
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distCampus, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
-                    if isKorea then
-                        -- Seowon: must be on Hills and NOT adjacent to City Center or other districts
-                        if plot:IsHills() and Map.GetPlotDistance(cityX, cityY, px, py) >= 2 then
-                            local touchesDistrict = false;
+                    if isSeowon then
+                        -- Seowon: MUST be on Hills! Base +4 Science, -1 per adjacent district. Must be isolated!
+                        if plot:IsHills() then
+                            local numAdjDistricts = 0;
                             local adjPlots = Map.GetAdjacentPlots(px, py);
                             for _, adj in pairs(adjPlots) do
                                 if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
-                                    touchesDistrict = true;
-                                    break;
+                                    numAdjDistricts = numAdjDistricts + 1;
                                 end
                             end
-                            if not touchesDistrict then
-                                local cScore = 4; -- Base Seowon +4 Science
-                                if cScore > bestCampusScore then
-                                    bestCampusScore = cScore;
-                                    bestCampus = plot;
-                                end
+                            local seowonScore = 4 - numAdjDistricts;
+                            -- Prefer 0 adjacent districts and distance >= 2 from city center
+                            if Map.GetPlotDistance(cityX, cityY, px, py) >= 2 and numAdjDistricts == 0 then
+                                seowonScore = seowonScore + 2;
+                            end
+                            if seowonScore > bestCampusScore then
+                                bestCampusScore = seowonScore;
+                                bestCampus = plot;
                             end
                         end
+                    elseif isObs then
+                        -- Observatory: +2 per adjacent Plantation, +0.5 per adjacent Farm, +0.5 per District
+                        local obsScore = 0;
+                        local adjPlots = Map.GetAdjacentPlots(px, py);
+                        for _, adj in pairs(adjPlots) do
+                            local rIdx = adj:GetResourceType();
+                            if rIdx ~= -1 then
+                                local rInfo = GameInfo.Resources[rIdx];
+                                if rInfo ~= nil then
+                                    local rType = rInfo.ResourceType;
+                                    if rType == "RESOURCE_BANANAS" or rType == "RESOURCE_CITRUS" or rType == "RESOURCE_COCOA" or
+                                       rType == "RESOURCE_COFFEE" or rType == "RESOURCE_COTTON" or rType == "RESOURCE_DYES" or
+                                       rType == "RESOURCE_SILK" or rType == "RESOURCE_SPICES" or rType == "RESOURCE_SUGAR" or
+                                       rType == "RESOURCE_TEA" or rType == "RESOURCE_TOBACCO" then
+                                        obsScore = obsScore + 2;
+                                    end
+                                end
+                            elseif not adj:IsHills() and not adj:IsMountain() and not adj:IsWater() then
+                                obsScore = obsScore + 0.5;
+                            end
+                            if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
+                                obsScore = obsScore + 0.5;
+                            end
+                        end
+                        if obsScore > bestCampusScore then
+                            bestCampusScore = obsScore;
+                            bestCampus = plot;
+                        end
                     else
+                        -- Standard Campus
                         local cScore = 0;
                         local adjPlots = Map.GetAdjacentPlots(px, py);
                         for _, adj in pairs(adjPlots) do
@@ -2190,12 +2640,18 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         if bestCampus ~= nil then
             assignedPlots[bestCampus:GetIndex()] = true;
             local cBonus = math.max(1, math.floor(bestCampusScore + 0.5));
+            local yieldText = "+" .. cBonus .. " [ICON_Science] Sci";
+            if isSeowon then
+                yieldText = "+" .. cBonus .. " [ICON_Science] Sci (Seowon โดดเดี่ยว)";
+            elseif isObs then
+                yieldText = "+" .. cBonus .. " [ICON_Science] Sci (Observatory แปลงเพาะปลูก)";
+            end
             table.insert(plannedDistricts, {
                 Plot = bestCampus,
                 DistrictType = distCampus,
                 BaseDistrictType = "DISTRICT_CAMPUS",
                 BaseName = Locale.Lookup(GameInfo.Districts[distCampus].Name),
-                YieldBonus = "+" .. cBonus .. " [ICON_Science] Sci",
+                YieldBonus = yieldText,
                 NumericBonus = cBonus,
                 IsSpecialty = true
             });
@@ -2292,27 +2748,75 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveEntertainmentPlot = bestEntertainment or GetExistingDistrictPlot("DISTRICT_ENTERTAINMENT_COMPLEX");
 
-    -- Step J: Theater Square (Specialty)
+    -- Step J: Theater Square (Specialty) - Unique District: Acropolis (Greece)
     local bestTheater = nil;
+    local isAcrop = (isGreece or distTheater == "DISTRICT_ACROPOLIS");
     if not CityHasDistrict("DISTRICT_THEATER") and GameInfo.Districts[distTheater] ~= nil then
         local bestTSScore = -1;
         for _, plot in ipairs(candidatePlots) do
-            if IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
+            -- Acropolis rule: Must be placed on Hills only!
+            local isValidTerrain = true;
+            if isAcrop and not plot:IsHills() then
+                isValidTerrain = false;
+            end
+
+            if isValidTerrain and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local px, py = plot:GetX(), plot:GetY();
                 local pinSub = { X = px, Y = py, Key = distTheater, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local tsScore = 0;
                     local adjPlots = Map.GetAdjacentPlots(px, py);
                     for _, adj in pairs(adjPlots) do
-                        if effectiveEntertainmentPlot and adj:GetIndex() == effectiveEntertainmentPlot:GetIndex() then
-                            tsScore = tsScore + 2; -- Major adjacency from Entertainment Complex
-                        end
-                        local feat = adj:GetFeatureType();
-                        if feat ~= -1 and GameInfo.Features[feat] and GameInfo.Features[feat].NaturalWonder then
-                            tsScore = tsScore + 2;
-                        end
-                        if assignedPlots[adj:GetIndex()] or (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or (adj:GetDistrictType() ~= -1) then
-                            tsScore = tsScore + 0.5;
+                        local isAdjCityCenter = (adj:IsCity() and adj:GetX() == cityX and adj:GetY() == cityY) or adj:IsCity();
+                        local isAdjDistrict = assignedPlots[adj:GetIndex()] or (adj:GetDistrictType() ~= -1) or isAdjCityCenter;
+
+                        if isAcrop then
+                            -- Acropolis Adjacency:
+                            -- +1 Culture for each adjacent district (DISTRICT_ALL)
+                            -- +1 Culture additional for adjacent City Center (DISTRICT_CITY_CENTER -> total +2)
+                            -- +2 Culture for each adjacent Wonder, Entertainment Complex, Water Park, Pamukkale
+                            if isAdjCityCenter then
+                                tsScore = tsScore + 2; -- +1 district + 1 city center
+                            elseif isAdjDistrict then
+                                tsScore = tsScore + 1;
+                            end
+
+                            if effectiveEntertainmentPlot and adj:GetIndex() == effectiveEntertainmentPlot:GetIndex() then
+                                tsScore = tsScore + 2;
+                            end
+                            local dType = adj:GetDistrictType();
+                            if dType ~= -1 and GameInfo.Districts[dType] then
+                                local dName = GameInfo.Districts[dType].DistrictType;
+                                if dName == "DISTRICT_ENTERTAINMENT_COMPLEX" or dName == "DISTRICT_WATER_ENTERTAINMENT_COMPLEX" or dName == "DISTRICT_WONDER" then
+                                    tsScore = tsScore + 2;
+                                end
+                            end
+                            local feat = adj:GetFeatureType();
+                            if feat ~= -1 and GameInfo.Features[feat] and (GameInfo.Features[feat].NaturalWonder or GameInfo.Features[feat].FeatureType == "FEATURE_PAMUKKALE") then
+                                tsScore = tsScore + 2;
+                            end
+                        else
+                            -- Standard Theater Square Adjacency:
+                            -- +2 from Entertainment Complex / Water Park
+                            -- +2 from World Wonders / Pamukkale
+                            -- +0.5 from each adjacent district (+1 per 2)
+                            if effectiveEntertainmentPlot and adj:GetIndex() == effectiveEntertainmentPlot:GetIndex() then
+                                tsScore = tsScore + 2;
+                            end
+                            local dType = adj:GetDistrictType();
+                            if dType ~= -1 and GameInfo.Districts[dType] then
+                                local dName = GameInfo.Districts[dType].DistrictType;
+                                if dName == "DISTRICT_ENTERTAINMENT_COMPLEX" or dName == "DISTRICT_WATER_ENTERTAINMENT_COMPLEX" or dName == "DISTRICT_WONDER" then
+                                    tsScore = tsScore + 2;
+                                end
+                            end
+                            local feat = adj:GetFeatureType();
+                            if feat ~= -1 and GameInfo.Features[feat] and (GameInfo.Features[feat].NaturalWonder or GameInfo.Features[feat].FeatureType == "FEATURE_PAMUKKALE") then
+                                tsScore = tsScore + 2;
+                            end
+                            if isAdjDistrict then
+                                tsScore = tsScore + 0.5;
+                            end
                         end
                     end
                     if tsScore > bestTSScore then
@@ -2325,12 +2829,13 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         if bestTheater ~= nil then
             assignedPlots[bestTheater:GetIndex()] = true;
             local tsBonus = math.max(1, math.floor(bestTSScore + 0.5));
+            local yieldDesc = isAcrop and string.format("+%d [ICON_Culture] Cul (Acropolis เนินเขา)", tsBonus) or string.format("+%d [ICON_Culture] Cul", tsBonus);
             table.insert(plannedDistricts, {
                 Plot = bestTheater,
                 DistrictType = distTheater,
                 BaseDistrictType = "DISTRICT_THEATER",
                 BaseName = Locale.Lookup(GameInfo.Districts[distTheater].Name),
-                YieldBonus = "+" .. tsBonus .. " [ICON_Culture] Cul",
+                YieldBonus = yieldDesc,
                 NumericBonus = tsBonus,
                 IsSpecialty = true
             });
@@ -2415,14 +2920,21 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveDiploQuarterPlot = bestDiplo or GetExistingDistrictPlot("DISTRICT_DIPLOMATIC_QUARTER");
 
-    -- Step M: Encampment (Specialty) - Rule 3 & 4: dist >= 2 and dist <= 3
+    -- Step M: Encampment (Specialty) - Unique District: Thành (Vietnam, Non-specialty)
     local bestEncampment = nil;
+    local isThanh = (isVietnam or distEncampment == "DISTRICT_THANH");
     if not CityHasDistrict("DISTRICT_ENCAMPMENT") and GameInfo.Districts[distEncampment] ~= nil then
         local bestEncScore = -1;
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
-            if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
+            -- Thành and Encampment: NoAdjacentCity (dist >= 2) and workable range (dist <= 3)
+            local isValidFeature = true;
+            if isThanh and not IsValidVietnamFeature(plot) then
+                isValidFeature = false;
+            end
+
+            if isValidFeature and distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distEncampment, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
                     local minOtherCityDist = 999;
@@ -2432,17 +2944,31 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                     end
                     if minOtherCityDist >= 3 then
                         local encScore = 2;
-                        if plot:IsHills() then encScore = encScore + 4; end -- High defense on hills
-                        if minOtherCityDist >= 4 then
-                            encScore = encScore + 3; -- Facing wild frontier/borders away from friendly cities
-                        end
                         local adjPlots = Map.GetAdjacentPlots(px, py);
-                        for _, adj in pairs(adjPlots) do
-                            local rIdx = adj:GetResourceType();
-                            if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
-                                encScore = encScore + 1;
+
+                        if isThanh then
+                            -- Vietnam Thành: +2 Culture for each adjacent district!
+                            local adjDistCount = 0;
+                            for _, adj in pairs(adjPlots) do
+                                if assignedPlots[adj:GetIndex()] or (adj:GetDistrictType() ~= -1) or adj:IsCity() then
+                                    adjDistCount = adjDistCount + 1;
+                                end
+                            end
+                            encScore = (adjDistCount * 4) + (plot:IsHills() and 3 or 0) + 4;
+                        else
+                            -- Standard Encampment: High defense on hills & border positioning
+                            if plot:IsHills() then encScore = encScore + 4; end
+                            if minOtherCityDist >= 4 then
+                                encScore = encScore + 3; -- Facing wild frontier/borders
+                            end
+                            for _, adj in pairs(adjPlots) do
+                                local rIdx = adj:GetResourceType();
+                                if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                                    encScore = encScore + 1;
+                                end
                             end
                         end
+
                         if encScore > bestEncScore then
                             bestEncScore = encScore;
                             bestEncampment = plot;
@@ -2453,15 +2979,34 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         end
         if bestEncampment ~= nil then
             assignedPlots[bestEncampment:GetIndex()] = true;
-            table.insert(plannedDistricts, {
-                Plot = bestEncampment,
-                DistrictType = distEncampment,
-                BaseDistrictType = "DISTRICT_ENCAMPMENT",
-                BaseName = Locale.Lookup(GameInfo.Districts[distEncampment].Name),
-                YieldBonus = "+2 [ICON_Production] & Defense",
-                NumericBonus = 2,
-                IsSpecialty = true
-            });
+            if isThanh then
+                local adjDistCount = 0;
+                for _, adj in pairs(Map.GetAdjacentPlots(bestEncampment:GetX(), bestEncampment:GetY())) do
+                    if assignedPlots[adj:GetIndex()] or (adj:GetDistrictType() ~= -1) or adj:IsCity() then
+                        adjDistCount = adjDistCount + 1;
+                    end
+                end
+                local thanhCul = adjDistCount * 2;
+                table.insert(plannedDistricts, {
+                    Plot = bestEncampment,
+                    DistrictType = distEncampment,
+                    BaseDistrictType = "DISTRICT_ENCAMPMENT",
+                    BaseName = Locale.Lookup(GameInfo.Districts[distEncampment].Name),
+                    YieldBonus = string.format("+%d [ICON_Culture] Cul & Defense (Thành ฟรี Pop)", thanhCul),
+                    NumericBonus = thanhCul + 2,
+                    IsSpecialty = false -- Non-Specialty: does not consume Pop slot!
+                });
+            else
+                table.insert(plannedDistricts, {
+                    Plot = bestEncampment,
+                    DistrictType = distEncampment,
+                    BaseDistrictType = "DISTRICT_ENCAMPMENT",
+                    BaseName = Locale.Lookup(GameInfo.Districts[distEncampment].Name),
+                    YieldBonus = "+2 [ICON_Production] & Defense",
+                    NumericBonus = 2,
+                    IsSpecialty = true
+                });
+            end
         end
     end
     local effectiveEncampmentPlot = bestEncampment or GetExistingDistrictPlot("DISTRICT_ENCAMPMENT");
@@ -2590,6 +3135,79 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         end
     end
     local effectiveSpaceportPlot = bestSpaceport or GetExistingDistrictPlot("DISTRICT_SPACEPORT");
+
+    -- Step Q: Preserve (Specialty, NoAdjacentCity: dist >= 2, High Appeal / Nature synergy)
+    local bestPreserve = nil;
+    if not CityHasDistrict("DISTRICT_PRESERVE") and GameInfo.Districts[distPreserve] ~= nil then
+        local bestPreserveScore = -999;
+        local bestPreserveHousing = 1;
+        local bestPreserveAppeal = 0;
+        local bestPreserveAdjHigh = 0;
+
+        for _, plot in ipairs(candidatePlots) do
+            local px, py = plot:GetX(), plot:GetY();
+            local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+
+            -- Preserve rule: NoAdjacentCity (dist >= 2) and within workable territory (dist <= 3)
+            if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
+                local pinSub = { X = px, Y = py, Key = distPreserve, Type = MAP_PIN_TYPES.DISTRICT };
+                if CanPlacePin(playerID, pinSub) then
+                    local appeal = plot:GetAppeal();
+                    local housing = (appeal >= 4) and 3 or ((appeal >= 2) and 2 or 1);
+                    local preserveScore = housing * 5;
+                    local adjHighCount = 0;
+
+                    local adjPlots = Map.GetAdjacentPlots(px, py);
+                    for _, adj in pairs(adjPlots) do
+                        local adjAppeal = adj:GetAppeal();
+                        local fIdx = adj:GetFeatureType();
+                        local isNatWonder = (fIdx ~= -1 and GameInfo.Features[fIdx] and GameInfo.Features[fIdx].NaturalWonder);
+
+                        if adj:IsMountain() or isNatWonder then
+                            preserveScore = preserveScore + 6; -- Mountain/Natural Wonder is permanently pristine unimproved tile
+                            adjHighCount = adjHighCount + 1;
+                        elseif adj:IsWater() then
+                            preserveScore = preserveScore + 2; -- Coast/Lake provides appeal
+                        elseif adjAppeal >= 4 then
+                            preserveScore = preserveScore + 4; -- Breathtaking neighbor for Grove/Sanctuary
+                            adjHighCount = adjHighCount + 1;
+                        elseif adjAppeal >= 2 then
+                            preserveScore = preserveScore + 2; -- Charming neighbor
+                            adjHighCount = adjHighCount + 1;
+                        end
+
+                        -- Penalize adjacency to heavy industry or other planned districts (reduces unimproved nature tiles)
+                        if assignedPlots[adj:GetIndex()] or (adj:GetDistrictType() ~= -1) then
+                            preserveScore = preserveScore - 2;
+                        end
+                    end
+
+                    if preserveScore > bestPreserveScore then
+                        bestPreserveScore = preserveScore;
+                        bestPreserveHousing = housing;
+                        bestPreserveAppeal = appeal;
+                        bestPreserveAdjHigh = adjHighCount;
+                        bestPreserve = plot;
+                    end
+                end
+            end
+        end
+
+        if bestPreserve ~= nil then
+            assignedPlots[bestPreserve:GetIndex()] = true;
+            local yieldText = string.format("+%d Housing (Appeal %d, บัฟ %d ช่อง)", bestPreserveHousing, bestPreserveAppeal, bestPreserveAdjHigh);
+            table.insert(plannedDistricts, {
+                Plot = bestPreserve,
+                DistrictType = distPreserve,
+                BaseDistrictType = "DISTRICT_PRESERVE",
+                BaseName = Locale.Lookup(GameInfo.Districts[distPreserve].Name),
+                YieldBonus = yieldText,
+                NumericBonus = bestPreserveHousing + bestPreserveAdjHigh,
+                IsSpecialty = true
+            });
+        end
+    end
+    local effectivePreservePlot = bestPreserve or GetExistingDistrictPlot("DISTRICT_PRESERVE");
 
     -- Rule 5: Priority Ranking & Population Cap Assignment
     for _, item in ipairs(plannedDistricts) do
