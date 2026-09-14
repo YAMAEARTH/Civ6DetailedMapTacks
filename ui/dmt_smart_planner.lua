@@ -1239,8 +1239,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
 
     occupiedPlots[Map.GetPlot(cityX, cityY):GetIndex()] = true;
 
-    -- Cache other friendly cities for Engine-Lock (Ring 1) and Capital Ring 1 & 2 Protection
-    local otherCities = {};
+    -- Cache all cities on the map (both player's and other civs/city-states) for Engine-Lock, Anti-Encroachment & Capital Protection
+    local allCitiesOnMap = {};
+    local otherFriendlyCities = {};
     local capitalX, capitalY = nil, nil;
     if pPlayer and pPlayer:GetCities() ~= nil then
         local cap = pPlayer:GetCities():GetCapitalCity();
@@ -1248,11 +1249,35 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             capitalX = cap:GetX();
             capitalY = cap:GetY();
         end
-        for _, oc in pPlayer:GetCities():Members() do
-            if oc ~= nil then
-                local ocX, ocY = oc:GetX(), oc:GetY();
-                if ocX ~= cityX or ocY ~= cityY then
-                    table.insert(otherCities, { City = oc, X = ocX, Y = ocY, IsCapital = oc:IsCapital() });
+    end
+
+    local alivePlayers = Game.GetPlayers{Alive = true};
+    for _, aPlayer in ipairs(alivePlayers) do
+        local aCities = aPlayer:GetCities();
+        if aCities ~= nil then
+            for _, c in aCities:Members() do
+                if c ~= nil then
+                    local cx, cy = c:GetX(), c:GetY();
+                    if cx ~= cityX or cy ~= cityY then
+                        local isSame = (aPlayer:GetID() == playerID);
+                        local isCap = false;
+                        pcall(function() if c.IsCapital then isCap = c:IsCapital(); end end);
+                        local cName = "City";
+                        pcall(function() if c.GetName then cName = Locale.Lookup(c:GetName()); end end);
+                        local cityEntry = {
+                            City = c,
+                            X = cx,
+                            Y = cy,
+                            Owner = aPlayer:GetID(),
+                            IsSamePlayer = isSame,
+                            IsCapital = isCap,
+                            Name = cName
+                        };
+                        table.insert(allCitiesOnMap, cityEntry);
+                        if isSame then
+                            table.insert(otherFriendlyCities, cityEntry);
+                        end
+                    end
                 end
             end
         end
@@ -1271,16 +1296,20 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         -- Rule 2: Exclude Luxury Resources & Revealed Strategic Resources
         local hasForbiddenRes = HasForbiddenResourceForDistrict(playerID, plot);
 
-        -- REQUIREMENT 1: Engine Lock (Ring 1 of ANY other city cannot be swapped in Civ 6!)
-        -- Strictly require Map.GetPlotDistance(plot, otherCity) >= 2
-        local isEngineLockedToOtherCity = false;
-        for _, oc in ipairs(otherCities) do
-            local distToOther = Map.GetPlotDistance(px, py, oc.X, oc.Y);
-            if distToOther < 2 then -- Distance 0 (City Center) or 1 (Ring 1 core tiles)
-                isEngineLockedToOtherCity = true;
-                break;
+        -- Proximity to nearest other city across the entire map
+        local minDistToAnyCity = 999;
+        local nearestCity = nil;
+        for _, oc in ipairs(allCitiesOnMap) do
+            local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+            if d < minDistToAnyCity then
+                minDistToAnyCity = d;
+                nearestCity = oc;
             end
         end
+
+        -- REQUIREMENT 1: Engine Lock (Ring 1 of ANY city in the world cannot be swapped in Civ 6!)
+        -- Strictly require Map.GetPlotDistance(plot, anyCity) >= 2
+        local isEngineLockedToOtherCity = (minDistToAnyCity < 2);
 
         -- REQUIREMENT 2: Capital Starvation Prevention (Rings 1 & 2 of Capital are locked to Capital!)
         local isCapitalProtected = false;
@@ -1291,7 +1320,14 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             end
         end
 
-        -- REQUIREMENT 2: Do not steal pins already planned for another city (especially Capital)
+        -- REQUIREMENT 3: Natural Sphere of Influence / Anti-Encroachment
+        -- Never plan a district on a tile that is CLOSER to another city than to THIS city!
+        local isCloserToOtherCity = (minDistToAnyCity < distFromCity);
+
+        -- Never plan a district in Ring 2 of another city if this city is at Ring 3 (distance >= 3)
+        local isInvadingOtherRing2 = (minDistToAnyCity <= 2 and distFromCity >= 3);
+
+        -- REQUIREMENT 4: Do not steal pins already planned for another city (especially Capital)
         local isClaimedByOtherCity = false;
         local autoInfo = m_AutoDistrictPins[px .. "_" .. py];
         if autoInfo ~= nil then
@@ -1309,7 +1345,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             end
         end
 
-        if isOutOfRange or hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin or hasForbiddenRes or isEngineLockedToOtherCity or isCapitalProtected or isClaimedByOtherCity then
+        if isOutOfRange or hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin or hasForbiddenRes or isEngineLockedToOtherCity or isCapitalProtected or isCloserToOtherCity or isInvadingOtherRing2 or isClaimedByOtherCity then
             occupiedPlots[pIdx] = true;
         else
             table.insert(candidatePlots, plot);
@@ -1493,17 +1529,97 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
 
     -- Step A1: Dam (Non-specialty) - River Floodplains only, NO Coastal Floodplains, 1 Dam per river system!
+    -- Scored optimization: Prioritize Ring 1/2 of THIS city, Aqueduct & Industrial Zone synergy, STRICTLY forbid sticking to another city!
     local bestDam = nil;
+    local bestDamScore = -9999;
     if not CityHasDistrict("DISTRICT_DAM") and GameInfo.Districts[distDam] ~= nil then
         for _, plot in ipairs(candidatePlots) do
             if IsPlotAvailable(plot, false) and not plot:IsWater() then
                 local px, py = plot:GetX(), plot:GetY();
                 if IsValidRiverFloodplainForDam(plot) and not IsDamAlreadyOnRiver(playerID, px, py) and IsValidDamPosition(playerID, px, py) then
-                    bestDam = plot;
-                    break;
+                    local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
+
+                    -- Check distance to all other cities on map
+                    local minOtherDist = 999;
+                    for _, oc in ipairs(allCitiesOnMap) do
+                        local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+                        if d < minOtherDist then
+                            minOtherDist = d;
+                        end
+                    end
+
+                    -- Strict Dam Rejections:
+                    -- 1. Never in Ring 1 of ANY other city (Engine Lock)
+                    -- 2. Never in Ring 2 of another city if distFromCity >= 2 (Never stick to another city!)
+                    -- 3. Never closer to another city than to THIS city
+                    -- 4. Never Ring 3 Dam if it's within 3 tiles of another city
+                    local bDamValid = true;
+                    if minOtherDist < 2 then
+                        bDamValid = false;
+                    elseif minOtherDist <= 2 and distFromCity >= 2 then
+                        bDamValid = false;
+                    elseif minOtherDist < distFromCity then
+                        bDamValid = false;
+                    elseif distFromCity == 3 and minOtherDist <= 3 then
+                        bDamValid = false;
+                    end
+
+                    if bDamValid then
+                        local score = 0;
+
+                        -- Distance preference (Ring 1 > Ring 2 >> Ring 3)
+                        if distFromCity == 1 then
+                            score = score + 50; -- Ring 1: adjacent to city center, best!
+                        elseif distFromCity == 2 then
+                            score = score + 25; -- Ring 2: close workable tile
+                        elseif distFromCity == 3 then
+                            score = score - 20; -- Ring 3: outer edge, heavily penalized
+                        end
+
+                        -- Safety distance from other cities
+                        if minOtherDist >= 4 then
+                            score = score + 15;
+                        elseif minOtherDist == 3 then
+                            score = score + 5;
+                        end
+
+                        -- Aqueduct synergy: can this Dam be adjacent to a candidate Ring 1 Aqueduct?
+                        local canTouchAqueduct = false;
+                        local openAdjacentCount = 0;
+                        for _, adj in pairs(Map.GetAdjacentPlots(px, py)) do
+                            local ax, ay = adj:GetX(), adj:GetY();
+                            if Map.GetPlotDistance(cityX, cityY, ax, ay) == 1 then
+                                if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
+                                    if IsValidAqueductPosition(playerID, ax, ay) then
+                                        canTouchAqueduct = true;
+                                    end
+                                end
+                            end
+                            if IsPlotAvailable(adj, false) and not adj:IsWater() and not adj:IsMountain() then
+                                openAdjacentCount = openAdjacentCount + 1;
+                            end
+                        end
+
+                        if canTouchAqueduct then
+                            score = score + 35; -- Critical: empowers Aqueduct + Dam + Industrial Zone synergy!
+                        end
+                        score = score + (openAdjacentCount * 4);
+
+                        if plot:IsOwned() and plot:GetOwner() == playerID then
+                            score = score + 10;
+                        end
+
+                        if score > bestDamScore then
+                            bestDamScore = score;
+                            bestDam = plot;
+                        end
+                    end
                 end
             end
         end
+    end
+    if bestDamScore <= 0 then
+        bestDam = nil;
     end
     local effectiveDamPlot = bestDam or GetExistingDistrictPlot("DISTRICT_DAM");
 
