@@ -375,6 +375,26 @@ local function HasForbiddenResourceForDistrict(playerID, plot)
     return false;
 end
 
+-- Helper: Retrieve which city owns a given plot for a player
+local function GetPlotOwningCity(plot, playerID)
+    if plot == nil or not plot:IsOwned() then return nil; end
+    if playerID ~= nil and plot:GetOwner() ~= playerID then return nil; end
+    if Cities ~= nil and Cities.GetPlotPurchaseCity ~= nil then
+        local pcallOk, c = pcall(function() return Cities.GetPlotPurchaseCity(plot); end);
+        if pcallOk and c ~= nil then return c; end
+    end
+    if CityManager ~= nil and CityManager.GetPlotOwner ~= nil then
+        local pcallOk, pPlayerID, pCityID = pcall(function() return CityManager.GetPlotOwner(plot); end);
+        if pcallOk and pCityID ~= nil and pCityID ~= -1 then
+            local pPlayer = Players[pPlayerID or playerID];
+            if pPlayer and pPlayer:GetCities() then
+                return pPlayer:GetCities():FindID(pCityID);
+            end
+        end
+    end
+    return nil;
+end
+
 -- Rule 1: Dam 1-per-river system check across the whole empire/map
 local function IsDamAlreadyOnRiver(playerID, px, py)
     if RiverManager == nil then return false; end
@@ -624,6 +644,7 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     local px, py = pPlot:GetX(), pPlot:GetY();
     local reasons = {};
     local waterTag = "ไม่มีน้ำ (2 Housing)";
+    local playerCfg = PlayerConfigurations[playerID];
 
     -- 0. Loyalty Pressure Check (Strictly forbid settling if loyalty pressure is critically negative)
     local loyaltyVal = GetPlotLoyaltyPressure(pPlot);
@@ -678,7 +699,29 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
         end
     end
 
-    -- 3. Ring 1 Yields (6 hexes)
+    -- 3. Ring 1 & Ring 2 Yields with Existing City Protection
+    -- For cities 2, 3, 4: Deduct cannibalization points and ignore phantom yields from tiles already claimed by existing cities!
+    local pPlayer = Players[playerID];
+    local pCities = pPlayer and pPlayer:GetCities();
+    local cityCount = pCities and pCities:GetCount() or 0;
+    local existingCitiesList = {};
+    if cityCount >= 1 then
+        for _, ec in pCities:Members() do
+            if ec ~= nil then
+                table.insert(existingCitiesList, {
+                    City = ec,
+                    X = ec:GetX(),
+                    Y = ec:GetY(),
+                    Name = Locale.Lookup(ec:GetName())
+                });
+            end
+        end
+    end
+
+    local cannibalizedTilesCount = 0;
+    local freshTilesCount = 0;
+
+    -- Ring 1 Yields (6 hexes)
     local ring1Plots = Map.GetAdjacentPlots(px, py);
     for _, adjPlot in pairs(ring1Plots) do
         if adjPlot ~= nil and IsPlotVisibleOrRevealed(adjPlot, playerID) and not adjPlot:IsImpassable() then
@@ -689,40 +732,82 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
             local c = adjPlot:GetYield(GameInfo.Yields["YIELD_CULTURE"].Index);
             local faith = adjPlot:GetYield(GameInfo.Yields["YIELD_FAITH"].Index);
 
-            if f >= 3 then score = score + 5; else score = score + (f * 1.5); end
-            if p >= 2 then score = score + 6; else score = score + (p * 2.0); end
-            score = score + (s * 2.5) + (c * 2.5) + (faith * 2.0) + (g * 0.5);
+            local isRing1OfExisting = false;
+            local isRing2OfExisting = false;
+            local isOwnedByExisting = false;
+            local hasExistingDistrict = false;
 
-            local rIndex = adjPlot:GetResourceType();
-            if rIndex ~= -1 then
-                local rInfo = GameInfo.Resources[rIndex];
-                if rInfo ~= nil then
-                    if rInfo.ResourceClassType == "RESOURCECLASS_LUXURY" then
-                        score = score + 7;
-                    elseif rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then
-                        score = score + 5;
-                    else
-                        score = score + 3;
+            if #existingCitiesList > 0 then
+                for _, ec in ipairs(existingCitiesList) do
+                    local d = Map.GetPlotDistance(adjPlot:GetX(), adjPlot:GetY(), ec.X, ec.Y);
+                    if d <= 1 then
+                        isRing1OfExisting = true;
+                        break;
+                    elseif d == 2 then
+                        isRing2OfExisting = true;
                     end
+                end
+                if adjPlot:IsOwned() and adjPlot:GetOwner() == playerID then
+                    isOwnedByExisting = true;
+                end
+                local dType = adjPlot:GetDistrictType();
+                if (dType ~= nil and dType ~= -1) or adjPlot:IsCity() or m_AutoDistrictPins[adjPlot:GetX() .. "_" .. adjPlot:GetY()] ~= nil or (playerCfg ~= nil and HasManualPinAtPlot(playerCfg, adjPlot:GetX(), adjPlot:GetY())) then
+                    hasExistingDistrict = true;
                 end
             end
 
-            local featIndex = adjPlot:GetFeatureType();
-            if featIndex ~= -1 then
-                local featInfo = GameInfo.Features[featIndex];
-                if featInfo ~= nil then
-                    if featInfo.NaturalWonder then
-                        score = score + 14;
-                    elseif featInfo.FeatureType == "FEATURE_GEOTHERMAL_FISSURE" or featInfo.FeatureType == "FEATURE_REEF" then
-                        score = score + 4;
-                    elseif featInfo.FeatureType == "FEATURE_FOREST" or featInfo.FeatureType == "FEATURE_JUNGLE" or featInfo.FeatureType == "FEATURE_MARSH" then
-                        score = score + 2;
+            if isRing1OfExisting then
+                -- Tile belongs permanently to existing city (Engine Locked!). Cannot be worked or swapped!
+                score = score - 8;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+            elseif isOwnedByExisting or hasExistingDistrict then
+                -- Already claimed or constructed by an existing city!
+                score = score - 4;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+            elseif isRing2OfExisting then
+                -- In Ring 2 of existing city (contested border): heavily discounted yields
+                score = score - 2;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+                score = score + (f * 0.7) + (p * 0.8);
+            else
+                -- Fresh new workable land for the empire!
+                freshTilesCount = freshTilesCount + 1;
+                score = score + 2; -- Expansion bonus per fresh tile
+                if f >= 3 then score = score + 5; else score = score + (f * 1.5); end
+                if p >= 2 then score = score + 6; else score = score + (p * 2.0); end
+                score = score + (s * 2.5) + (c * 2.5) + (faith * 2.0) + (g * 0.5);
+
+                local rIndex = adjPlot:GetResourceType();
+                if rIndex ~= -1 then
+                    local rInfo = GameInfo.Resources[rIndex];
+                    if rInfo ~= nil then
+                        if rInfo.ResourceClassType == "RESOURCECLASS_LUXURY" then
+                            score = score + 7;
+                        elseif rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                            score = score + 5;
+                        else
+                            score = score + 3;
+                        end
                     end
                 end
-            end
 
-            if adjPlot:IsMountain() then
-                score = score + 2.5;
+                local featIndex = adjPlot:GetFeatureType();
+                if featIndex ~= -1 then
+                    local featInfo = GameInfo.Features[featIndex];
+                    if featInfo ~= nil then
+                        if featInfo.NaturalWonder then
+                            score = score + 14;
+                        elseif featInfo.FeatureType == "FEATURE_GEOTHERMAL_FISSURE" or featInfo.FeatureType == "FEATURE_REEF" then
+                            score = score + 4;
+                        elseif featInfo.FeatureType == "FEATURE_FOREST" or featInfo.FeatureType == "FEATURE_JUNGLE" or featInfo.FeatureType == "FEATURE_MARSH" then
+                            score = score + 2;
+                        end
+                    end
+                end
+
+                if adjPlot:IsMountain() then
+                    score = score + 2.5;
+                end
             end
         end
     end
@@ -734,21 +819,68 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
         if dist == 2 and IsPlotVisibleOrRevealed(plot2, playerID) and not plot2:IsImpassable() then
             local f = plot2:GetYield(GameInfo.Yields["YIELD_FOOD"].Index);
             local p = plot2:GetYield(GameInfo.Yields["YIELD_PRODUCTION"].Index);
-            score = score + (f * 0.8) + (p * 1.0);
 
-            local rIndex = plot2:GetResourceType();
-            if rIndex ~= -1 then
-                local rInfo = GameInfo.Resources[rIndex];
-                if rInfo ~= nil then
-                    if rInfo.ResourceClassType == "RESOURCECLASS_LUXURY" then score = score + 4;
-                    elseif rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then score = score + 3; end
+            local isRing1OfExisting = false;
+            local isRing2OfExisting = false;
+            local isOwnedByExisting = false;
+            local hasExistingDistrict = false;
+
+            if #existingCitiesList > 0 then
+                for _, ec in ipairs(existingCitiesList) do
+                    local d = Map.GetPlotDistance(plot2:GetX(), plot2:GetY(), ec.X, ec.Y);
+                    if d <= 1 then
+                        isRing1OfExisting = true;
+                        break;
+                    elseif d == 2 then
+                        isRing2OfExisting = true;
+                    end
+                end
+                if plot2:IsOwned() and plot2:GetOwner() == playerID then
+                    isOwnedByExisting = true;
+                end
+                local dType = plot2:GetDistrictType();
+                if (dType ~= nil and dType ~= -1) or plot2:IsCity() or m_AutoDistrictPins[plot2:GetX() .. "_" .. plot2:GetY()] ~= nil or (playerCfg ~= nil and HasManualPinAtPlot(playerCfg, plot2:GetX(), plot2:GetY())) then
+                    hasExistingDistrict = true;
                 end
             end
 
-            local featIndex = plot2:GetFeatureType();
-            if featIndex ~= -1 and GameInfo.Features[featIndex] and GameInfo.Features[featIndex].NaturalWonder then
-                score = score + 10;
+            if isRing1OfExisting then
+                score = score - 4;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+            elseif isOwnedByExisting or hasExistingDistrict then
+                score = score - 2;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+            elseif isRing2OfExisting then
+                score = score + (f * 0.4) + (p * 0.5);
+            else
+                freshTilesCount = freshTilesCount + 1;
+                score = score + (f * 0.8) + (p * 1.0);
+
+                local rIndex = plot2:GetResourceType();
+                if rIndex ~= -1 then
+                    local rInfo = GameInfo.Resources[rIndex];
+                    if rInfo ~= nil then
+                        if rInfo.ResourceClassType == "RESOURCECLASS_LUXURY" then score = score + 4;
+                        elseif rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then score = score + 3; end
+                    end
+                end
+
+                local featIndex = plot2:GetFeatureType();
+                if featIndex ~= -1 and GameInfo.Features[featIndex] and GameInfo.Features[featIndex].NaturalWonder then
+                    score = score + 10;
+                end
             end
+        end
+    end
+
+    if #existingCitiesList > 0 then
+        if freshTilesCount >= 8 then
+            score = score + 15;
+            table.insert(reasons, string.format("พื้นที่ขยายอาณาจักรใหม่ %d ช่อง (+15)", freshTilesCount));
+        end
+        if cannibalizedTilesCount >= 5 then
+            score = score - (cannibalizedTilesCount * 3);
+            table.insert(reasons, string.format("ทับซ้อนพื้นที่เมืองเดิม %d ช่อง (-%d)", cannibalizedTilesCount, cannibalizedTilesCount * 3));
         end
     end
 
@@ -773,22 +905,18 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     end
 
     -- 7. Subsequent Settler Distance Scoring to Existing Friendly Cities
-    local pPlayer = Players[playerID];
-    local pCities = pPlayer and pPlayer:GetCities();
-    local cityCount = pCities and pCities:GetCount() or 0;
-
     if cityCount >= 1 then
         local minCityDist = 999;
         local nearestCity = nil;
-        for _, city in pCities:Members() do
-            local d = Map.GetPlotDistance(px, py, city:GetX(), city:GetY());
+        for _, city in ipairs(existingCitiesList) do
+            local d = Map.GetPlotDistance(px, py, city.X, city.Y);
             if d < minCityDist then
                 minCityDist = d;
                 nearestCity = city;
             end
         end
 
-        local nearestCityName = nearestCity and Locale.Lookup(nearestCity:GetName()) or "เมืองเดิม";
+        local nearestCityName = nearestCity and nearestCity.Name or "เมืองเดิม";
 
         -- Check Rings 1-3 for any Luxury or Strategic resource the empire does NOT possess yet
         local hasNewResource = false;
@@ -820,22 +948,29 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
 
         -- Distance Scoring Logic:
         -- dist < 4: Rejected by engine (cut off)
-        -- dist == 4 or 5: +15 pts (Golden distance: AoE 6-tile radius buffs & district combos)
-        -- dist == 6: +5 pts (Standard workable distance)
+        -- dist == 4: +10 pts (Compact empire)
+        -- dist == 5: +18 pts (Golden distance: zero inner ring overlap, district synergy, AoE buff)
+        -- dist == 6: +10 pts (Standard workable distance)
         -- dist >= 7: -10 pts (Too far from empire)
-        -- Exception: If Rings 1-3 have unowned Luxury or Strategic, +20 pts compensation for claiming new resource
         if minCityDist < 4 then
             return -9999, waterTag, {"ระยะใกล้เมืองเกินไป (< 4 ช่อง)"};
-        elseif minCityDist == 4 or minCityDist == 5 then
-            score = score + 15;
-            table.insert(reasons, string.format("ระยะทองคำ %d ช่องจาก %s (+15)", minCityDist, nearestCityName));
+        elseif minCityDist == 4 then
+            score = score + 10;
+            table.insert(reasons, string.format("ระยะติดเมืองเดิม 4 ช่องจาก %s (+10)", nearestCityName));
             if hasNewResource then
                 score = score + 10;
                 table.insert(reasons, "เคลมแร่ใหม่ของอาณาจักร: " .. table.concat(newResNames, ", "));
             end
+        elseif minCityDist == 5 then
+            score = score + 18;
+            table.insert(reasons, string.format("ระยะทองคำ 5 ช่องจาก %s (+18 ขยายอิสระไร้การทับซ้อน)", nearestCityName));
+            if hasNewResource then
+                score = score + 12;
+                table.insert(reasons, "เคลมแร่ใหม่ของอาณาจักร: " .. table.concat(newResNames, ", "));
+            end
         elseif minCityDist == 6 then
-            score = score + 5;
-            table.insert(reasons, string.format("ระยะมาตรฐาน 6 ช่องจาก %s (+5)", nearestCityName));
+            score = score + 10;
+            table.insert(reasons, string.format("ระยะมาตรฐาน 6 ช่องจาก %s (+10)", nearestCityName));
             if hasNewResource then
                 score = score + 10;
                 table.insert(reasons, "เคลมแร่ใหม่ของอาณาจักร: " .. table.concat(newResNames, ", "));
@@ -1302,6 +1437,17 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         -- Rule 2: Exclude Luxury Resources & Revealed Strategic Resources
         local hasForbiddenRes = HasForbiddenResourceForDistrict(playerID, plot);
 
+        -- Check tile ownership: plot owned by another friendly city!
+        local owningCity = GetPlotOwningCity(plot, playerID);
+        local isOwnedByAnotherCity = false;
+        if owningCity ~= nil then
+            local ocX, ocY = owningCity:GetX(), owningCity:GetY();
+            local ocID = owningCity:GetID();
+            if (thisCityID ~= nil and ocID ~= thisCityID) or (ocX ~= cityX or ocY ~= cityY) then
+                isOwnedByAnotherCity = true;
+            end
+        end
+
         -- Proximity to nearest OTHER city across the entire map (strictly excluding this city!)
         local minDistToAnyCity = 999;
         local nearestCity = nil;
@@ -1315,11 +1461,12 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             end
         end
 
-        -- REQUIREMENT 1: Engine Lock (Ring 1 of ANY city in the world cannot be swapped in Civ 6!)
-        -- Strictly require Map.GetPlotDistance(plot, anyCity) >= 2
-        local isEngineLockedToOtherCity = (minDistToAnyCity < 2);
+        -- REQUIREMENT 1 & 2: Engine Lock & Zero-Tolerance Core Encroachment
+        -- Civ 6 rule: Ring 1 of ANY city is Engine Locked (cannot swap). Ring 2 is core workable territory.
+        -- Strictly forbid ANY specialty/infrastructure district if plot is within 2 tiles of ANY other city (minDistToAnyCity <= 2)!
+        local isInvadingOtherCityCore = (minDistToAnyCity <= 2);
 
-        -- REQUIREMENT 2: Capital Starvation Prevention (Rings 1 & 2 of Capital are locked to Capital!)
+        -- Capital Starvation Prevention (Rings 1 & 2 of Capital are locked to Capital!)
         local isCapitalProtected = false;
         if not isCapital and capitalX ~= nil and capitalY ~= nil then
             local distToCap = Map.GetPlotDistance(px, py, capitalX, capitalY);
@@ -1332,8 +1479,8 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         -- Never plan a district on a tile that is CLOSER to another city than to THIS city!
         local isCloserToOtherCity = (minDistToAnyCity < distFromCity);
 
-        -- Never plan a district in Ring 2 of another city if this city is at Ring 3 (distance >= 3)
-        local isInvadingOtherRing2 = (minDistToAnyCity <= 2 and distFromCity >= 3);
+        -- Never plan a district on outer border (Ring 3) if within 3 tiles of another city
+        local isContestedBorder = (distFromCity == 3 and minDistToAnyCity <= 3);
 
         -- REQUIREMENT 4: Do not steal pins already planned for another city (especially Capital)
         local isClaimedByOtherCity = false;
@@ -1353,7 +1500,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             end
         end
 
-        if isOutOfRange or hasExistingDistrict or isForeignOwned or isImpassable or hasManualPin or hasForbiddenRes or isEngineLockedToOtherCity or isCapitalProtected or isCloserToOtherCity or isInvadingOtherRing2 or isClaimedByOtherCity then
+        if isOutOfRange or hasExistingDistrict or isForeignOwned or isOwnedByAnotherCity or isImpassable or hasManualPin or hasForbiddenRes or isInvadingOtherCityCore or isCapitalProtected or isCloserToOtherCity or isContestedBorder or isClaimedByOtherCity then
             occupiedPlots[pIdx] = true;
         else
             table.insert(candidatePlots, plot);
@@ -2268,19 +2415,28 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
             if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() then
                 local pinSub = { X = px, Y = py, Key = distEncampment, Type = MAP_PIN_TYPES.DISTRICT };
                 if CanPlacePin(playerID, pinSub) then
-                    local encScore = 2;
-                    if plot:IsHills() then encScore = encScore + 4; end -- High defense on hills
-                    if distFromCity == 3 then encScore = encScore + 2; end -- Outer perimeter defense
-                    local adjPlots = Map.GetAdjacentPlots(px, py);
-                    for _, adj in pairs(adjPlots) do
-                        local rIdx = adj:GetResourceType();
-                        if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
-                            encScore = encScore + 1;
-                        end
+                    local minOtherCityDist = 999;
+                    for _, oc in ipairs(allCitiesOnMap) do
+                        local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+                        if d < minOtherCityDist then minOtherCityDist = d; end
                     end
-                    if encScore > bestEncScore then
-                        bestEncScore = encScore;
-                        bestEncampment = plot;
+                    if minOtherCityDist >= 3 then
+                        local encScore = 2;
+                        if plot:IsHills() then encScore = encScore + 4; end -- High defense on hills
+                        if minOtherCityDist >= 4 then
+                            encScore = encScore + 3; -- Facing wild frontier/borders away from friendly cities
+                        end
+                        local adjPlots = Map.GetAdjacentPlots(px, py);
+                        for _, adj in pairs(adjPlots) do
+                            local rIdx = adj:GetResourceType();
+                            if rIdx ~= -1 and GameInfo.Resources[rIdx] and GameInfo.Resources[rIdx].ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                                encScore = encScore + 1;
+                            end
+                        end
+                        if encScore > bestEncScore then
+                            bestEncScore = encScore;
+                            bestEncampment = plot;
+                        end
                     end
                 end
             end
