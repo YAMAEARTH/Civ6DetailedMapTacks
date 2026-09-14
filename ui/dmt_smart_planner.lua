@@ -82,11 +82,22 @@ end
 
 local m_SettlerPanelDismissedByUser = false;
 
+function UpdateSmartPlannerContextVisibility()
+    local bSettlerOpen = Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden();
+    local bDistrictOpen = Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden();
+    if bSettlerOpen or bDistrictOpen then
+        ContextPtr:SetHide(false);
+    else
+        ContextPtr:SetHide(true);
+    end
+end
+
 function OnCloseSettlerPanel()
     m_SettlerPanelDismissedByUser = true;
     if Controls.SettlerRecommendationPanel then
         Controls.SettlerRecommendationPanel:SetHide(true);
     end
+    UpdateSmartPlannerContextVisibility();
     UI.PlaySound("Play_UI_Click");
 end
 
@@ -94,6 +105,7 @@ function OnCloseDistrictPanel()
     if Controls.CityDistrictPlanPanel then
         Controls.CityDistrictPlanPanel:SetHide(true);
     end
+    UpdateSmartPlannerContextVisibility();
     UI.PlaySound("Play_UI_Click");
 end
 
@@ -1349,6 +1361,7 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
     if not bForceRefresh and m_LastSettlerUnitID == pUnit:GetID() and m_LastSettlerPlotIndex == settlerPlotIndex and next(m_AutoSettlerPins) ~= nil then
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(false);
+            UpdateSmartPlannerContextVisibility();
         end
         return;
     end
@@ -1488,6 +1501,7 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
 
     if Controls.SettlerRecommendationPanel then
         Controls.SettlerRecommendationPanel:SetHide(false);
+        UpdateSmartPlannerContextVisibility();
     end
 
     UI.PlaySound("Map_Pin_Add");
@@ -1688,6 +1702,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     ClearAutoSettlerPins(playerID);
     if Controls.SettlerRecommendationPanel then
         Controls.SettlerRecommendationPanel:SetHide(true);
+        UpdateSmartPlannerContextVisibility();
     end
 
     ClearAutoDistrictsForCity(playerID, cityX, cityY);
@@ -3322,6 +3337,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     -- Show City District HUD Panel
     if Controls.CityDistrictPlanPanel then
         Controls.CityDistrictPlanPanel:SetHide(false);
+        UpdateSmartPlannerContextVisibility();
         if Controls.CityNameLabel then
             if #plannedDistricts > 0 and #builtDistrictsList > 0 then
                 Controls.CityNameLabel:SetText(string.format("ผังเขต [%s] (สร้างแล้ว %d • รอสร้าง %d):", cityName, #builtDistrictsList, #plannedDistricts));
@@ -3605,6 +3621,7 @@ function DMT_OnUnitSelectionChanged(playerID, unitID, hexI, hexJ, hexK, bSelecte
         m_SettlerPanelDismissedByUser = false;
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(true);
+            UpdateSmartPlannerContextVisibility();
         end
         return;
     end
@@ -3624,6 +3641,7 @@ function DMT_OnUnitSelectionChanged(playerID, unitID, hexI, hexJ, hexK, bSelecte
         m_SettlerPanelDismissedByUser = false;
         if Controls.SettlerRecommendationPanel then
             Controls.SettlerRecommendationPanel:SetHide(true);
+            UpdateSmartPlannerContextVisibility();
         end
     end
 end
@@ -3666,52 +3684,15 @@ function DMT_OnCitySelectionChanged(owner, cityID, i, j, k, bSelected, bEditable
     if not bSelected then
         if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
             Controls.CityDistrictPlanPanel:SetHide(true);
+            UpdateSmartPlannerContextVisibility();
         end
     end
 end
 
 -- =======================================================================
--- Initialization & Input Handling
+-- Initialization & Dynamic Context Visibility
 -- =======================================================================
 local m_SmartPlannerInitialized = false;
-local m_IsShiftDownSmartPlanner = false;
-
-function OnSmartPlannerInputHandler(pInputStruct:table)
-    local uiMsg = pInputStruct:GetMessageType();
-    local key = pInputStruct:GetKey();
-
-    if key == Keys.VK_SHIFT then
-        m_IsShiftDownSmartPlanner = (uiMsg == KeyEvents.KeyDown);
-    end
-
-    -- Close open panels on ESC key
-    if key == Keys.VK_ESCAPE and uiMsg == KeyEvents.KeyUp then
-        local bHandled = false;
-        if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-            OnCloseSettlerPanel();
-            bHandled = true;
-        end
-        if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-            OnCloseDistrictPanel();
-            bHandled = true;
-        end
-        if bHandled then
-            return true;
-        end
-    end
-
-    if (uiMsg == KeyEvents.KeyDown or uiMsg == KeyEvents.KeyUp) then
-        local isShift = m_IsShiftDownSmartPlanner or (pInputStruct.IsShiftDown and pInputStruct:IsShiftDown());
-        local isKeyA = (key == Keys.A or key == 65 or (Keys.VK_A and key == Keys.VK_A));
-        if isShift and isKeyA then
-            print("DMT: Shift+A detected in SmartPlanner context, triggering hotkey!");
-            m_SettlerPanelDismissedByUser = false;
-            OnTriggerSmartPlannerHotkey();
-            return true;
-        end
-    end
-    return false;
-end
 
 function DMT_SmartPlanner_Initialize()
     if m_SmartPlannerInitialized then return; end
@@ -3719,8 +3700,8 @@ function DMT_SmartPlanner_Initialize()
 
     EnsureInstanceManagers();
 
-    -- Register input handler as non-modal (false) so it never intercepts mouse clicks from HUD or World
-    ContextPtr:SetInputHandler(OnSmartPlannerInputHandler, false);
+    -- Ensure Context is hidden by default so it never captures mouse clicks or hit-tests
+    UpdateSmartPlannerContextVisibility();
 
     Events.UnitSelectionChanged.Add(DMT_OnUnitSelectionChanged);
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
@@ -3733,12 +3714,14 @@ function DMT_SmartPlanner_Initialize()
         if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
             Controls.SettlerRecommendationPanel:SetHide(true);
         end
+        UpdateSmartPlannerContextVisibility();
     end);
 
     if LuaEvents.ProductionPanel_Open then
         LuaEvents.ProductionPanel_Open.Add(function()
             if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
                 Controls.CityDistrictPlanPanel:SetHide(true);
+                UpdateSmartPlannerContextVisibility();
             end
         end);
     end
@@ -3746,6 +3729,7 @@ function DMT_SmartPlanner_Initialize()
         LuaEvents.CityPanel_ProductionOpen.Add(function()
             if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
                 Controls.CityDistrictPlanPanel:SetHide(true);
+                UpdateSmartPlannerContextVisibility();
             end
         end);
     end
