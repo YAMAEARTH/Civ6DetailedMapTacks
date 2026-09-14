@@ -292,6 +292,33 @@ local function IsEmpireDistrictAlreadyPlanned(baseDistrictType)
     return false;
 end
 
+local function CountEmpireSpaceports(playerID)
+    local count = 0;
+    local pPlayer = Players[playerID];
+    if pPlayer and pPlayer:GetCities() then
+        for _, city in pPlayer:GetCities():Members() do
+            local pCityDistricts = city:GetDistricts();
+            if pCityDistricts ~= nil then
+                for _, district in pCityDistricts:Members() do
+                    if district ~= nil and type(district) == "table" and district.GetType ~= nil then
+                        local dType = district:GetType();
+                        if dType ~= -1 and GameInfo.Districts[dType] ~= nil and GameInfo.Districts[dType].DistrictType == "DISTRICT_SPACEPORT" then
+                            count = count + 1;
+                            break;
+                        end
+                    end
+                end
+            end
+        end
+    end
+    for key, info in pairs(m_AutoDistrictPins) do
+        if type(info) == "table" and (info.BaseDistrictType == "DISTRICT_SPACEPORT" or info.DistrictType == "DISTRICT_SPACEPORT") then
+            count = count + 1;
+        end
+    end
+    return count;
+end
+
 -- Rule 3: Canal Valid Geometry & Strict Civ 6 Engine Rules
 -- 1. Must be on flat land (not water, not hills, not mountain)
 -- 2. Must NOT create a three-way junction: in Civ 6, a Canal district is strictly forbidden
@@ -655,7 +682,17 @@ local function CalculateDistrictPriority(item, cityHasFreshWater)
     elseif baseType == "DISTRICT_AERODROME" then
         score = 35;
     elseif baseType == "DISTRICT_SPACEPORT" then
-        score = 20;
+        score = 30 + num * 2;
+        local hasRocketry = false;
+        pcall(function()
+            local pPlayer = Players[Game.GetLocalPlayer()];
+            if pPlayer and pPlayer:GetTechs() and GameInfo.Technologies["TECH_ROCKETRY"] then
+                hasRocketry = pPlayer:GetTechs():HasTech(GameInfo.Technologies["TECH_ROCKETRY"].Index);
+            end
+        end);
+        if hasRocketry then
+            score = score + 45; -- Prioritize rushing Spaceport for Science Victory once Rocketry is researched
+        end
     end
     return score;
 end
@@ -1239,6 +1276,21 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
             score = score + 15;
             table.insert(reasons, string.format("เวียดนาม: ป่าและหนองน้ำ %d ช่อง อุดมสมบูรณ์สำหรับผังเขต (+15)", vietnamFeatureCount));
         end
+    end
+
+    -- D. Late-Game High-Tech Flat Land Potential (Spaceport & Aerodrome)
+    local flatLandCount = 0;
+    for _, p2 in ipairs(allWithin2) do
+        local d = Map.GetPlotDistance(px, py, p2:GetX(), p2:GetY());
+        if d >= 1 and d <= 2 and not p2:IsWater() and not p2:IsMountain() and not p2:IsHills() and not p2:IsImpassable() then
+            if not HasForbiddenResourceForDistrict(playerID, p2) then
+                flatLandCount = flatLandCount + 1;
+            end
+        end
+    end
+    if flatLandCount >= 4 and #candidateAQPlots > 0 then
+        score = score + 4;
+        table.insert(reasons, "มีที่ราบเปิดกว้างสำหรับเขตเทคโนโลยี/อวกาศ (+4)");
     end
 
     -- 5. Movement Distance Penalty
@@ -3118,33 +3170,156 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
     local effectiveAerodromePlot = bestAerodrome or GetExistingDistrictPlot("DISTRICT_AERODROME");
 
-    -- Step P: Spaceport (Non-specialty, flat land only)
+    -- Step P: Spaceport (Non-specialty, strictly Flat Land only, Multi-Factor Scoring)
+    -- Civ 6 Engine Rules from civ6_rules/districts/spaceport.md:
+    -- 1. Non-Specialty: RequiresPopulation = false (does not consume city district quota)
+    -- 2. NoAdjacentCity = false: CAN be built in Ring 1 adjacent to City Center! Workable range 1-3.
+    -- 3. Strictly Flat Land only: Desert, Grass, Plains, Snow, Tundra (No Hills, No Mountain, No Water, No Impassable, No Ice, No Natural Wonder)
+    -- 4. Resource Constraints: Cannot crush Luxury or revealed Strategic. Bonus resources only if harvest tech unlocked.
+    -- 5. Science Victory Quota: Allow up to 3 Spaceports empire-wide across top-tier production cities for laser project acceleration.
     local bestSpaceport = nil;
-    if not CityHasDistrict("DISTRICT_SPACEPORT") and GameInfo.Districts[distSpaceport] ~= nil then
-        local bestSpaceScore = -1;
+    local empireSpaceportCount = CountEmpireSpaceports(playerID);
+    local qualifiesForSpaceport = false;
+
+    -- City production gating: Spaceport costs 1800 base production. Only cities with real industrial capacity qualify.
+    if effectiveIZPlot ~= nil or CityHasDistrict("DISTRICT_INDUSTRIAL_ZONE") then
+        qualifiesForSpaceport = true;
+    elseif isCapital then
+        qualifiesForSpaceport = true;
+    elseif pCity ~= nil and pCity:GetPopulation() >= 8 then
+        qualifiesForSpaceport = true;
+    end
+
+    if qualifiesForSpaceport and empireSpaceportCount < 3 and not CityHasDistrict("DISTRICT_SPACEPORT") and GameInfo.Districts[distSpaceport] ~= nil then
+        local bestSpaceScore = -999;
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
             local distFromCity = Map.GetPlotDistance(cityX, cityY, px, py);
-            if distFromCity >= 2 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() then
-                local pinSub = { X = px, Y = py, Key = distSpaceport, Type = MAP_PIN_TYPES.DISTRICT };
-                if CanPlacePin(playerID, pinSub) then
-                    local spaceScore = (distFromCity == 3) and 6 or 4;
-                    if spaceScore > bestSpaceScore then
-                        bestSpaceScore = spaceScore;
-                        bestSpaceport = plot;
+
+            -- Valid range 1 to 3 hexes; strictly Flat Land (No Hills, Mountain, Water, Impassable)
+            if distFromCity >= 1 and distFromCity <= 3 and IsPlotAvailable(plot, false) and not plot:IsWater() and not plot:IsMountain() and not plot:IsHills() and not plot:IsImpassable() then
+                local tIdx = plot:GetTerrainType();
+                local isTerrainValid = false;
+                if tIdx ~= -1 and GameInfo.Terrains[tIdx] ~= nil then
+                    local tType = GameInfo.Terrains[tIdx].TerrainType;
+                    if tType == "TERRAIN_DESERT" or tType == "TERRAIN_GRASS" or tType == "TERRAIN_PLAINS" or tType == "TERRAIN_SNOW" or tType == "TERRAIN_TUNDRA" then
+                        isTerrainValid = true;
+                    end
+                end
+
+                local fIdx = plot:GetFeatureType();
+                local isFeatureForbidden = false;
+                if fIdx ~= -1 and GameInfo.Features[fIdx] ~= nil then
+                    local fType = GameInfo.Features[fIdx].FeatureType;
+                    if fType == "FEATURE_ICE" or GameInfo.Features[fIdx].NaturalWonder then
+                        isFeatureForbidden = true;
+                    end
+                end
+
+                if isTerrainValid and not isFeatureForbidden and not HasForbiddenResourceForDistrict(playerID, plot) then
+                    local pinSub = { X = px, Y = py, Key = distSpaceport, Type = MAP_PIN_TYPES.DISTRICT };
+                    if CanPlacePin(playerID, pinSub) then
+                        local spaceScore = 10;
+
+                        -- 1. Spy Protection & Counterspy Radius:
+                        -- Ring 1 is directly protected by City Center garrison, walls strike, and Counterspy in City Center!
+                        if distFromCity == 1 then
+                            spaceScore = spaceScore + 8;
+                        elseif distFromCity == 2 then
+                            spaceScore = spaceScore + 5;
+                        else
+                            spaceScore = spaceScore + 1;
+                        end
+
+                        -- 2. Industrial Zone Synergy (Production core & Great Engineer transit)
+                        if effectiveIZPlot ~= nil then
+                            local dToIZ = Map.GetPlotDistance(px, py, effectiveIZPlot:GetX(), effectiveIZPlot:GetY());
+                            if dToIZ == 1 then
+                                spaceScore = spaceScore + 6;
+                            elseif dToIZ == 2 then
+                                spaceScore = spaceScore + 2;
+                            end
+                        end
+
+                        -- 3. Diplomatic Quarter / Government Plaza Proximity (Counterspy defense cluster)
+                        if effectiveDiploQuarterPlot ~= nil and Map.GetPlotDistance(px, py, effectiveDiploQuarterPlot:GetX(), effectiveDiploQuarterPlot:GetY()) == 1 then
+                            spaceScore = spaceScore + 3;
+                        end
+                        if effectiveGovPlazaPlot ~= nil and Map.GetPlotDistance(px, py, effectiveGovPlazaPlot:GetX(), effectiveGovPlazaPlot:GetY()) == 1 then
+                            spaceScore = spaceScore + 2;
+                        end
+
+                        -- 4. Tactical Safety from Hostile Borders & Pillage Raids
+                        local minDistToForeignCity = 999;
+                        for _, oc in ipairs(allCitiesOnMap) do
+                            if not oc.IsSamePlayer then
+                                local d = Map.GetPlotDistance(px, py, oc.X, oc.Y);
+                                if d < minDistToForeignCity then
+                                    minDistToForeignCity = d;
+                                end
+                            end
+                        end
+                        if minDistToForeignCity <= 3 then
+                            spaceScore = spaceScore - 12; -- Dangerously close to enemy frontlines
+                        elseif minDistToForeignCity <= 5 then
+                            spaceScore = spaceScore - 6;
+                        elseif minDistToForeignCity >= 8 then
+                            spaceScore = spaceScore + 4;  -- Deep safe interior
+                        end
+
+                        -- 5. Coastal Vulnerability Check (Naval Raider Pillaging)
+                        local adjPlots = Map.GetAdjacentPlots(px, py);
+                        local isCoastalExposed = false;
+                        local mountainHillsShield = 0;
+                        for _, adj in pairs(adjPlots) do
+                            if adj:IsWater() and not adj:IsLake() then
+                                isCoastalExposed = true;
+                            end
+                            if adj:IsMountain() or adj:IsHills() then
+                                mountainHillsShield = mountainHillsShield + 1;
+                            end
+                        end
+                        if isCoastalExposed then
+                            spaceScore = spaceScore - 4; -- Coastline spaceports risk naval bombardment
+                        end
+                        if mountainHillsShield >= 2 then
+                            spaceScore = spaceScore + 3;
+                        elseif mountainHillsShield == 1 then
+                            spaceScore = spaceScore + 1;
+                        end
+
+                        -- 6. Preserve Protection (Spaceport reduces Appeal by -1)
+                        local existingPreserve = GetExistingDistrictPlot("DISTRICT_PRESERVE");
+                        if existingPreserve ~= nil and Map.GetPlotDistance(px, py, existingPreserve:GetX(), existingPreserve:GetY()) == 1 then
+                            spaceScore = spaceScore - 8;
+                        end
+
+                        -- 7. Low-Yield Land Efficiency (Barren flat desert/snow/tundra is ideal)
+                        if tIdx ~= -1 and GameInfo.Terrains[tIdx] ~= nil then
+                            local tType = GameInfo.Terrains[tIdx].TerrainType;
+                            if tType == "TERRAIN_DESERT" or tType == "TERRAIN_SNOW" or tType == "TERRAIN_TUNDRA" then
+                                spaceScore = spaceScore + 4;
+                            end
+                        end
+
+                        if spaceScore > bestSpaceScore then
+                            bestSpaceScore = spaceScore;
+                            bestSpaceport = plot;
+                        end
                     end
                 end
             end
         end
         if bestSpaceport ~= nil then
             assignedPlots[bestSpaceport:GetIndex()] = true;
+            local numBonus = math.max(1, math.floor(bestSpaceScore / 3));
             table.insert(plannedDistricts, {
                 Plot = bestSpaceport,
                 DistrictType = distSpaceport,
                 BaseDistrictType = "DISTRICT_SPACEPORT",
                 BaseName = Locale.Lookup(GameInfo.Districts[distSpaceport].Name),
-                YieldBonus = "Science Victory Projects",
-                NumericBonus = 5,
+                YieldBonus = "Science Victory (โครงการอวกาศ)",
+                NumericBonus = numBonus,
                 IsSpecialty = false
             });
         end
@@ -3194,6 +3369,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
                         -- Penalize adjacency to heavy industry or other planned districts (reduces unimproved nature tiles)
                         if assignedPlots[adj:GetIndex()] or (adj:GetDistrictType() ~= -1) then
                             preserveScore = preserveScore - 2;
+                        end
+                        if effectiveSpaceportPlot ~= nil and adj:GetIndex() == effectiveSpaceportPlot:GetIndex() then
+                            preserveScore = preserveScore - 3; -- Spaceport reduces appeal
                         end
                     end
 
