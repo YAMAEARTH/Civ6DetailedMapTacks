@@ -903,10 +903,13 @@ function IsPlotRevealedToPlayer(plot:table, playerID:number)
     return isPlotRevealed;
 end
 
+-- Global flag to allow smart planner to scan full 3-ring radius through Fog of War
+g_ScanThroughFog = false;
+
 -- Get plot's feature types.
 function GetPlotFeatureTypes(plot:table, playerID:number)
-    -- If the plot is invisible to the player, hide the plot information
-    if not IsPlotRevealedToPlayer(plot, playerID) then
+    -- If the plot is invisible to the player, hide the plot information unless scanning through fog
+    if not g_ScanThroughFog and not IsPlotRevealedToPlayer(plot, playerID) then
         return nil, nil, nil, nil, nil, nil;
     end
 

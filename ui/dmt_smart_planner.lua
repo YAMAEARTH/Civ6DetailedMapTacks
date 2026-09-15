@@ -426,7 +426,7 @@ local BONUS_HARVEST_TECHS = {
     RESOURCE_MAIZE = "TECH_POTTERY"
 };
 
--- Rule 2: Resource Tile Restrictions (Strictly forbid Luxury, Revealed Strategic, & Unharvestable Bonus resources)
+-- Rule 2: Resource Tile Restrictions (Strictly forbid Luxury & Strategic resources)
 local function HasForbiddenResourceForDistrict(playerID, plot)
     if plot == nil then return false; end
     local rIdx = plot:GetResourceType();
@@ -439,52 +439,15 @@ local function HasForbiddenResourceForDistrict(playerID, plot)
         return true;
     end
 
-    -- 2. Strategic Resources revealed by player's researched tech can NEVER be crushed
+    -- 2. Strategic Resources (Revealed or Map Data)
+    -- All strategic resources (Horses, Iron, Niter, Coal, Oil, Aluminum, Uranium) are strictly
+    -- avoided for districts, guaranteeing that no planned pin will ever be blocked when discovered later!
     if rInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then
-        local pPlayer = Players[playerID];
-        if pPlayer and pPlayer:GetResources() then
-            if pPlayer:GetResources():IsResourceVisible(rInfo.Hash) then
-                return true;
-            end
-        else
-            return true;
-        end
-    end
-
-    -- 3. Bonus Resources require their corresponding Harvest Technology to be researched
-    if rInfo.ResourceClassType == "RESOURCECLASS_BONUS" then
-        local prereqTechType = nil;
-        if GameInfo.Resource_Harvests ~= nil then
-            for row in GameInfo.Resource_Harvests() do
-                if row.ResourceType == rInfo.ResourceType then
-                    prereqTechType = row.PrereqTech;
-                    break;
-                end
-            end
-        end
-        if prereqTechType == nil then
-            prereqTechType = BONUS_HARVEST_TECHS[rInfo.ResourceType];
-        end
-
-        if prereqTechType ~= nil then
-            local techInfo = GameInfo.Technologies[prereqTechType];
-            if techInfo ~= nil then
-                local pPlayer = Players[playerID];
-                if pPlayer and pPlayer:GetTechs() then
-                    if not pPlayer:GetTechs():HasTech(techInfo.Index) then
-                        -- Player does not have the harvest tech yet! The game forbids placing districts on it!
-                        return true;
-                    end
-                end
-            end
-        end
-    end
-
-    -- 4. Any non-harvestable resource
-    if CanHarvestResource ~= nil and not CanHarvestResource(rInfo.ResourceType) then
         return true;
     end
 
+    -- 3. Bonus Resources (Cattle, Sheep, Stone, Deer, Bananas, Wheat, Rice, Copper, Maize, etc.)
+    -- ALLOWED to be pinned on for forward planning! The player can harvest/chop them before construction.
     return false;
 end
 
@@ -682,7 +645,7 @@ local function CalculateDistrictPriority(item, cityHasFreshWater)
     elseif baseType == "DISTRICT_AERODROME" then
         score = 35;
     elseif baseType == "DISTRICT_SPACEPORT" then
-        score = 30 + num * 2;
+        score = 15; -- Base priority score is low so it naturally ranks at the end (#8 - #12) as an endgame master plan
         local hasRocketry = false;
         pcall(function()
             local pPlayer = Players[Game.GetLocalPlayer()];
@@ -691,7 +654,7 @@ local function CalculateDistrictPriority(item, cityHasFreshWater)
             end
         end);
         if hasRocketry then
-            score = score + 45; -- Prioritize rushing Spaceport for Science Victory once Rocketry is researched
+            score = 80 + num * 2; -- Prioritize rushing Spaceport for Science Victory once Rocketry is researched
         end
     end
     return score;
@@ -755,6 +718,17 @@ function IsValidCitySettlePlot(playerID, pPlot)
     end
 
     local px, py = pPlot:GetX(), pPlot:GetY();
+
+    -- Hard Rejection 1: Never settle on an existing planned district pin!
+    if m_AutoDistrictPins[px .. "_" .. py] ~= nil then
+        return false;
+    end
+    -- Hard Rejection 2: Never settle on a player's manual pin!
+    local playerCfg = PlayerConfigurations[playerID];
+    if playerCfg ~= nil and HasManualPinAtPlot(playerCfg, px, py) then
+        return false;
+    end
+
     local minDistance = 3;
     local players = Game.GetPlayers{Alive = true};
     for _, player in ipairs(players) do
@@ -933,7 +907,14 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
                 end
             end
 
-            if isRing1OfExisting then
+            local autoPin1 = m_AutoDistrictPins[adjPlot:GetX() .. "_" .. adjPlot:GetY()];
+            if autoPin1 ~= nil then
+                -- CRITICAL: Tile is already reserved as a planned district for an existing city!
+                -- In Ring 1, the new city engine-locks it permanently, destroying the existing city's planned district!
+                score = score - 35;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+                table.insert(reasons, string.format("ทับซ้อนหมุด %s ของ %s (-35)", autoPin1.BaseName or "เขต", autoPin1.CityName or "เมืองเดิม"));
+            elseif isRing1OfExisting then
                 -- Tile belongs permanently to existing city (Engine Locked!). Cannot be worked or swapped!
                 score = score - 8;
                 cannibalizedTilesCount = cannibalizedTilesCount + 1;
@@ -1021,7 +1002,12 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
                 end
             end
 
-            if isRing1OfExisting then
+            local autoPin2 = m_AutoDistrictPins[plot2:GetX() .. "_" .. plot2:GetY()];
+            if autoPin2 ~= nil then
+                score = score - 15;
+                cannibalizedTilesCount = cannibalizedTilesCount + 1;
+                table.insert(reasons, string.format("เบียดเบียนหมุด %s (-15)", autoPin2.BaseName or "เขต"));
+            elseif isRing1OfExisting then
                 score = score - 4;
                 cannibalizedTilesCount = cannibalizedTilesCount + 1;
             elseif isOwnedByExisting or hasExistingDistrict then
@@ -1291,6 +1277,31 @@ function ScoreSettlerPlot(playerID, pPlot, settlerX, settlerY, grandAIPlots)
     if flatLandCount >= 4 and #candidateAQPlots > 0 then
         score = score + 4;
         table.insert(reasons, "มีที่ราบเปิดกว้างสำหรับเขตเทคโนโลยี/อวกาศ (+4)");
+    end
+
+    -- E. Cross-City Mega Cluster Potential (Industrial Zone connecting to existing Dam/Aqueduct)
+    local crossCityComboFound = false;
+    local comboDistrictName = "";
+    for _, p2 in ipairs(allWithin2) do
+        local d = Map.GetPlotDistance(px, py, p2:GetX(), p2:GetY());
+        if d >= 1 and d <= 2 and not p2:IsWater() and not p2:IsMountain() and not p2:IsImpassable() then
+            if not HasForbiddenResourceForDistrict(playerID, p2) then
+                local adjList = Map.GetAdjacentPlots(p2:GetX(), p2:GetY());
+                for _, adj in pairs(adjList) do
+                    local aPin = m_AutoDistrictPins[adj:GetX() .. "_" .. adj:GetY()];
+                    if aPin ~= nil and (aPin.BaseDistrictType == "DISTRICT_DAM" or aPin.BaseDistrictType == "DISTRICT_AQUEDUCT" or aPin.BaseDistrictType == "DISTRICT_CANAL") then
+                        crossCityComboFound = true;
+                        comboDistrictName = aPin.BaseName or "เขื่อน/ส่งน้ำเดิม";
+                        break;
+                    end
+                end
+            end
+        end
+        if crossCityComboFound then break; end
+    end
+    if crossCityComboFound then
+        score = score + 12;
+        table.insert(reasons, string.format("คอมโบอุตสาหกรรมข้ามเมืองกับ %s (+12)", comboDistrictName));
     end
 
     -- 5. Movement Distance Penalty
@@ -1780,6 +1791,8 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     end
 
     -- Rule 3: Enforce Workable Range (1 - 3 tiles strictly)
+    -- Enable fog-of-war scanning to generate the complete lifetime master plan (all 36 plots)
+    g_ScanThroughFog = true;
     local allCityPlots = GetPlotsWithinXTiles(cityX, cityY, 3);
     local candidatePlots = {};
     local occupiedPlots = {};
@@ -1844,7 +1857,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         local isOutOfRange = (distFromCity < 1 or distFromCity > 3);
         local hasExistingDistrict = plot:GetDistrictType() ~= -1 or plot:IsCity();
         local isForeignOwned = plot:IsOwned() and plot:GetOwner() ~= playerID;
-        local isImpassable = plot:IsImpassable() or not IsPlotVisibleOrRevealed(plot, playerID);
+        local isImpassable = plot:IsImpassable();
         local hasManualPin = HasManualPinAtPlot(playerCfg, px, py);
         -- Rule 2: Exclude Luxury Resources & Revealed Strategic Resources
         local hasForbiddenRes = HasForbiddenResourceForDistrict(playerID, plot);
@@ -3175,22 +3188,11 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     -- 1. Non-Specialty: RequiresPopulation = false (does not consume city district quota)
     -- 2. NoAdjacentCity = false: CAN be built in Ring 1 adjacent to City Center! Workable range 1-3.
     -- 3. Strictly Flat Land only: Desert, Grass, Plains, Snow, Tundra (No Hills, No Mountain, No Water, No Impassable, No Ice, No Natural Wonder)
-    -- 4. Resource Constraints: Cannot crush Luxury or revealed Strategic. Bonus resources only if harvest tech unlocked.
-    -- 5. Science Victory Quota: Allow up to 3 Spaceports empire-wide across top-tier production cities for laser project acceleration.
+    -- 4. Resource Constraints: Cannot crush Luxury or revealed Strategic. Bonus resources allowed for forward planning.
+    -- 5. Turn 1 Blueprint: Planned in every city with viable flat land to reserve prime land (base score 15, leaps to 80+ at Rocketry).
     local bestSpaceport = nil;
-    local empireSpaceportCount = CountEmpireSpaceports(playerID);
-    local qualifiesForSpaceport = false;
 
-    -- City production gating: Spaceport costs 1800 base production. Only cities with real industrial capacity qualify.
-    if effectiveIZPlot ~= nil or CityHasDistrict("DISTRICT_INDUSTRIAL_ZONE") then
-        qualifiesForSpaceport = true;
-    elseif isCapital then
-        qualifiesForSpaceport = true;
-    elseif pCity ~= nil and pCity:GetPopulation() >= 8 then
-        qualifiesForSpaceport = true;
-    end
-
-    if qualifiesForSpaceport and empireSpaceportCount < 3 and not CityHasDistrict("DISTRICT_SPACEPORT") and GameInfo.Districts[distSpaceport] ~= nil then
+    if not CityHasDistrict("DISTRICT_SPACEPORT") and GameInfo.Districts[distSpaceport] ~= nil then
         local bestSpaceScore = -999;
         for _, plot in ipairs(candidatePlots) do
             local px, py = plot:GetX(), plot:GetY();
@@ -3534,6 +3536,7 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
 
     UI.PlaySound("Map_Pin_Add");
     print(string.format("DMT Smart Planner: Successfully displayed UI and placed %d district pins for [%s] with priorities!", #plannedDistricts, cityName));
+    g_ScanThroughFog = false;
 end
 
 -- =======================================================================
