@@ -85,31 +85,14 @@ local m_IsGameLoadComplete = false;
 
 function UpdateSmartPlannerContextVisibility()
     if ContextPtr then
-        if ContextPtr.SetSizeVal then
-            ContextPtr:SetSizeVal(0, 0);
-        end
-        if ContextPtr.SetSizeX then
-            ContextPtr:SetSizeX(0);
-            ContextPtr:SetSizeY(0);
-        end
-    end
-    local bSettlerOpen = Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden();
-    local bDistrictOpen = Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden();
-    if bSettlerOpen or bDistrictOpen then
-        ContextPtr:SetHide(false);
-    else
         ContextPtr:SetHide(true);
     end
 end
 
 function DismissAllSmartPlannerPanels()
-    if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-        Controls.CityDistrictPlanPanel:SetHide(true);
+    if ContextPtr then
+        ContextPtr:SetHide(true);
     end
-    if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-        Controls.SettlerRecommendationPanel:SetHide(true);
-    end
-    UpdateSmartPlannerContextVisibility();
 end
 
 function OnCloseSettlerPanel()
@@ -1442,10 +1425,6 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
     local settlerPlotIndex = Map.GetPlot(settlerX, settlerY):GetIndex();
 
     if not bForceRefresh and m_LastSettlerUnitID == pUnit:GetID() and m_LastSettlerPlotIndex == settlerPlotIndex and next(m_AutoSettlerPins) ~= nil then
-        if Controls.SettlerRecommendationPanel then
-            Controls.SettlerRecommendationPanel:SetHide(false);
-            UpdateSmartPlannerContextVisibility();
-        end
         return;
     end
 
@@ -1582,13 +1561,12 @@ function RecommendSettlerSpots(playerID, pUnit, bForceRefresh)
     Network.BroadcastPlayerInfo();
     LuaEvents.DMT_RefreshMapPins();
 
-    if Controls.SettlerRecommendationPanel then
-        Controls.SettlerRecommendationPanel:SetHide(false);
-        UpdateSmartPlannerContextVisibility();
+    if UI.AddWorldViewText and settlerX and settlerY and topCount > 0 then
+        UI.AddWorldViewText(EventSubTypes.DAMAGE, string.format("[COLOR_FLOAT_GOLD]DMT: ปักหมุดแนะนำ %d จุดตั้งเมือง[ENDCOLOR]", topCount), settlerX, settlerY, 0);
     end
 
     UI.PlaySound("Map_Pin_Add");
-    print(string.format("DMT Smart Planner: Displayed UI and pinned %d spots for Settler at (%d, %d)", topCount, settlerX, settlerY));
+    print(string.format("DMT Smart Planner: Pinned %d spots for Settler at (%d, %d)", topCount, settlerX, settlerY));
 end
 
 -- =======================================================================
@@ -3566,35 +3544,12 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         end
     end
 
-    -- Show City District HUD Panel (only when explicitly requested via hotkey/bForce)
-    local pHeadCity = UI.GetHeadSelectedCity();
-    local bIsCurrentSelectedCity = (pHeadCity ~= nil and pHeadCity:GetX() == cityX and pHeadCity:GetY() == cityY);
-    local bShouldShowHUD = (bForce == true) and (bIsCurrentSelectedCity or pHeadCity == nil);
-
-    if bShouldShowHUD and Controls.CityDistrictPlanPanel then
-        local screenW, _ = UIManager:GetScreenSizeVal();
-        local posX = math.max(10, math.floor((screenW - 380) / 2));
-        Controls.CityDistrictPlanPanel:SetOffsetVal(posX, 70);
-        Controls.CityDistrictPlanPanel:SetHide(false);
-        UpdateSmartPlannerContextVisibility();
-        if Controls.CityNameLabel then
-            if #plannedDistricts > 0 and #builtDistrictsList > 0 then
-                Controls.CityNameLabel:SetText(string.format("ผังเขต [%s] (สร้างแล้ว %d • รอสร้าง %d):", cityName, #builtDistrictsList, #plannedDistricts));
-            elseif #plannedDistricts == 0 and #builtDistrictsList > 0 then
-                Controls.CityNameLabel:SetText(string.format("ผังเขต [%s] (สร้างครบแล้ว %d เขต):", cityName, #builtDistrictsList));
-            else
-                Controls.CityNameLabel:SetText(string.format("ผังเขต [%s] (ลำดับสร้าง %d เขต):", cityName, #plannedDistricts));
-            end
-        end
-        if Controls.LookAtCityButton then
-            Controls.LookAtCityButton:RegisterCallback(Mouse.eLClick, function()
-                UI.LookAtPlot(cityX, cityY);
-            end);
-        end
-    end
-
+    -- World view text and sound feedback on the map (Clean, non-intrusive)
     UI.PlaySound("Map_Pin_Add");
-    print(string.format("DMT Smart Planner: Successfully displayed UI and placed %d district pins for [%s] with priorities!", #plannedDistricts, cityName));
+    if UI.AddWorldViewText and cityX and cityY then
+        UI.AddWorldViewText(EventSubTypes.DAMAGE, string.format("[COLOR_FLOAT_SCIENCE]DMT: วางผัง 16 เขตให้ [%s] สำเร็จ (%d เขต)[ENDCOLOR]", cityName, #plannedDistricts), cityX, cityY, 0);
+    end
+    print(string.format("DMT Smart Planner: Successfully placed %d district pins for [%s] with priorities!", #plannedDistricts, cityName));
     g_ScanThroughFog = false;
 end
 
