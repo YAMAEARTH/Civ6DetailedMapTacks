@@ -205,6 +205,12 @@ function OnInputHandler(param1, param2, param3)
         return false;
     end
 
+    -- Fast-return false for any non-keyboard events (e.g. mouse clicks, moves)
+    -- Never intercept or delay mouse inputs meant for world/UI panels
+    if uiMsg ~= KeyEvents.KeyDown and uiMsg ~= KeyEvents.KeyUp then
+        return false;
+    end
+
     -- **Inspired by CQUI. Credits to infixo.**
     if key == Keys.VK_SHIFT or key == 16 then
         m_IsShiftDown = (uiMsg == KeyEvents.KeyDown);

@@ -3514,8 +3514,12 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
         end
     end
 
-    -- Show City District HUD Panel
-    if Controls.CityDistrictPlanPanel then
+    -- Show City District HUD Panel (only when explicitly requested via hotkey/bForce)
+    local pHeadCity = UI.GetHeadSelectedCity();
+    local bIsCurrentSelectedCity = (pHeadCity ~= nil and pHeadCity:GetX() == cityX and pHeadCity:GetY() == cityY);
+    local bShouldShowHUD = (bForce == true) and (bIsCurrentSelectedCity or pHeadCity == nil);
+
+    if bShouldShowHUD and Controls.CityDistrictPlanPanel then
         Controls.CityDistrictPlanPanel:SetHide(false);
         UpdateSmartPlannerContextVisibility();
         if Controls.CityNameLabel then
@@ -3674,7 +3678,7 @@ function ValidateAndRefreshAutoPins(playerID)
 
     for _, cityInfo in ipairs(sortedReplanCities) do
         print(string.format("DMT Turn Check: Automatically re-planning districts for city at (%d, %d)", cityInfo.CityX, cityInfo.CityY));
-        OptimizeCityDistricts(playerID, cityInfo.CityX, cityInfo.CityY, nil, true);
+        OptimizeCityDistricts(playerID, cityInfo.CityX, cityInfo.CityY, nil, false);
     end
 end
 
@@ -3807,6 +3811,12 @@ function DMT_OnUnitSelectionChanged(playerID, unitID, hexI, hexJ, hexK, bSelecte
         return;
     end
 
+    -- Close City District panel if open when switching to unit selection
+    if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+        Controls.CityDistrictPlanPanel:SetHide(true);
+        UpdateSmartPlannerContextVisibility();
+    end
+
     local pPlayer = Players[playerID];
     if not pPlayer then return; end
 
@@ -3862,7 +3872,12 @@ end
 
 function DMT_OnCitySelectionChanged(owner, cityID, i, j, k, bSelected, bEditable)
     if owner ~= Game.GetLocalPlayer() then return; end
-    if not bSelected then
+    if bSelected then
+        if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+            Controls.SettlerRecommendationPanel:SetHide(true);
+            UpdateSmartPlannerContextVisibility();
+        end
+    else
         if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
             Controls.CityDistrictPlanPanel:SetHide(true);
             UpdateSmartPlannerContextVisibility();
@@ -3902,16 +3917,33 @@ function DMT_SmartPlanner_Initialize()
         LuaEvents.ProductionPanel_Open.Add(function()
             if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
                 Controls.CityDistrictPlanPanel:SetHide(true);
-                UpdateSmartPlannerContextVisibility();
             end
+            if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+                Controls.SettlerRecommendationPanel:SetHide(true);
+            end
+            UpdateSmartPlannerContextVisibility();
         end);
     end
     if LuaEvents.CityPanel_ProductionOpen then
         LuaEvents.CityPanel_ProductionOpen.Add(function()
             if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
                 Controls.CityDistrictPlanPanel:SetHide(true);
-                UpdateSmartPlannerContextVisibility();
             end
+            if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+                Controls.SettlerRecommendationPanel:SetHide(true);
+            end
+            UpdateSmartPlannerContextVisibility();
+        end);
+    end
+    if LuaEvents.ProductionPanel_OpenManager then
+        LuaEvents.ProductionPanel_OpenManager.Add(function()
+            if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+                Controls.CityDistrictPlanPanel:SetHide(true);
+            end
+            if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+                Controls.SettlerRecommendationPanel:SetHide(true);
+            end
+            UpdateSmartPlannerContextVisibility();
         end);
     end
 
