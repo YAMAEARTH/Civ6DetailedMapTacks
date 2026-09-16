@@ -81,8 +81,18 @@ local function HasManualPinAtPlot(playerCfg, px, py)
 end
 
 local m_SettlerPanelDismissedByUser = false;
+local m_IsGameLoadComplete = false;
 
 function UpdateSmartPlannerContextVisibility()
+    if ContextPtr then
+        if ContextPtr.SetSizeVal then
+            ContextPtr:SetSizeVal(0, 0);
+        end
+        if ContextPtr.SetSizeX then
+            ContextPtr:SetSizeX(0);
+            ContextPtr:SetSizeY(0);
+        end
+    end
     local bSettlerOpen = Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden();
     local bDistrictOpen = Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden();
     if bSettlerOpen or bDistrictOpen then
@@ -90,6 +100,16 @@ function UpdateSmartPlannerContextVisibility()
     else
         ContextPtr:SetHide(true);
     end
+end
+
+function DismissAllSmartPlannerPanels()
+    if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
+        Controls.CityDistrictPlanPanel:SetHide(true);
+    end
+    if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
+        Controls.SettlerRecommendationPanel:SetHide(true);
+    end
+    UpdateSmartPlannerContextVisibility();
 end
 
 function OnCloseSettlerPanel()
@@ -3552,6 +3572,9 @@ function OptimizeCityDistricts(playerID, cityX, cityY, cityID, bForce)
     local bShouldShowHUD = (bForce == true) and (bIsCurrentSelectedCity or pHeadCity == nil);
 
     if bShouldShowHUD and Controls.CityDistrictPlanPanel then
+        local screenW, _ = UIManager:GetScreenSizeVal();
+        local posX = math.max(10, math.floor((screenW - 380) / 2));
+        Controls.CityDistrictPlanPanel:SetOffsetVal(posX, 70);
         Controls.CityDistrictPlanPanel:SetHide(false);
         UpdateSmartPlannerContextVisibility();
         if Controls.CityNameLabel then
@@ -3715,12 +3738,14 @@ function ValidateAndRefreshAutoPins(playerID)
 end
 
 function DMT_OnLocalPlayerTurnBegin()
+    m_IsGameLoadComplete = true;
     local playerID = Game.GetLocalPlayer();
     if playerID == -1 or playerID == 1000 then return; end
     ValidateAndRefreshAutoPins(playerID);
 end
 
 function DMT_OnPlayerTurnActivated(playerID, bIsFirstTime)
+    m_IsGameLoadComplete = true;
     if playerID ~= Game.GetLocalPlayer() then return; end
     ValidateAndRefreshAutoPins(playerID);
 end
@@ -3884,6 +3909,8 @@ function DMT_OnUnitMoveComplete(playerID, unitID, x, y)
 end
 
 function DMT_OnCityAddedToMap(ownerPlayerID, cityID, cityX, cityY)
+    -- Ignore city additions during save-game loading/deserialization
+    if not m_IsGameLoadComplete then return; end
     if ownerPlayerID ~= Game.GetLocalPlayer() then return; end
 
     local pPlayer = Players[ownerPlayerID];
@@ -3904,17 +3931,8 @@ end
 
 function DMT_OnCitySelectionChanged(owner, cityID, i, j, k, bSelected, bEditable)
     if owner ~= Game.GetLocalPlayer() then return; end
-    if bSelected then
-        if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-            Controls.SettlerRecommendationPanel:SetHide(true);
-            UpdateSmartPlannerContextVisibility();
-        end
-    else
-        if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-            Controls.CityDistrictPlanPanel:SetHide(true);
-            UpdateSmartPlannerContextVisibility();
-        end
-    end
+    -- Selecting or deselecting a city should dismiss lingering floating recommendation panels
+    DismissAllSmartPlannerPanels();
 end
 
 -- =======================================================================
@@ -3935,48 +3953,30 @@ function DMT_SmartPlanner_Initialize()
     Events.UnitMoveComplete.Add(DMT_OnUnitMoveComplete);
     Events.CityAddedToMap.Add(DMT_OnCityAddedToMap);
     Events.CitySelectionChanged.Add(DMT_OnCitySelectionChanged);
-    Events.LocalPlayerTurnEnd.Add(function()
-        if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-            Controls.CityDistrictPlanPanel:SetHide(true);
-        end
-        if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-            Controls.SettlerRecommendationPanel:SetHide(true);
-        end
-        UpdateSmartPlannerContextVisibility();
-    end);
+    Events.LocalPlayerTurnEnd.Add(DismissAllSmartPlannerPanels);
+    if Events.InterfaceModeChanged ~= nil then
+        Events.InterfaceModeChanged.Add(function(eOldMode, eNewMode)
+            DismissAllSmartPlannerPanels();
+        end);
+    end
 
-    if LuaEvents.ProductionPanel_Open then
-        LuaEvents.ProductionPanel_Open.Add(function()
-            if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-                Controls.CityDistrictPlanPanel:SetHide(true);
-            end
-            if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-                Controls.SettlerRecommendationPanel:SetHide(true);
-            end
-            UpdateSmartPlannerContextVisibility();
-        end);
-    end
-    if LuaEvents.CityPanel_ProductionOpen then
-        LuaEvents.CityPanel_ProductionOpen.Add(function()
-            if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-                Controls.CityDistrictPlanPanel:SetHide(true);
-            end
-            if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-                Controls.SettlerRecommendationPanel:SetHide(true);
-            end
-            UpdateSmartPlannerContextVisibility();
-        end);
-    end
-    if LuaEvents.ProductionPanel_OpenManager then
-        LuaEvents.ProductionPanel_OpenManager.Add(function()
-            if Controls.CityDistrictPlanPanel and not Controls.CityDistrictPlanPanel:IsHidden() then
-                Controls.CityDistrictPlanPanel:SetHide(true);
-            end
-            if Controls.SettlerRecommendationPanel and not Controls.SettlerRecommendationPanel:IsHidden() then
-                Controls.SettlerRecommendationPanel:SetHide(true);
-            end
-            UpdateSmartPlannerContextVisibility();
-        end);
+    -- Hook all possible production opening / purchasing events so DMT panels never obstruct production
+    local prodLuaEvents = {
+        "ProductionPanel_Open",
+        "ProductionPanel_OpenManager",
+        "CityPanel_ProductionOpen",
+        "CityPanel_ChooseProduction",
+        "CityPanel_ChoosePurchase",
+        "CityPanel_PurchaseGoldOpen",
+        "CityPanel_PurchaseFaithOpen",
+        "CityPanel_ProductionOpenForQueue",
+        "CityBannerManager_ProductionToggle",
+        "NotificationPanel_ChooseProduction"
+    };
+    for _, evtName in ipairs(prodLuaEvents) do
+        if LuaEvents[evtName] ~= nil then
+            LuaEvents[evtName].Add(DismissAllSmartPlannerPanels);
+        end
     end
 
     -- Turn-by-Turn Dynamic Border & District Validation
@@ -3984,6 +3984,7 @@ function DMT_SmartPlanner_Initialize()
     Events.PlayerTurnActivated.Add(DMT_OnPlayerTurnActivated);
     if Events.LoadGameViewStateDone ~= nil then
         Events.LoadGameViewStateDone.Add(function()
+            m_IsGameLoadComplete = true;
             local pId = Game.GetLocalPlayer();
             if pId ~= -1 and pId ~= 1000 then
                 ValidateAndRefreshAutoPins(pId);

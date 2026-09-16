@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Context Hidden="1" ConsumeMouse="0">
+<Context Size="0,0" Hidden="1" ConsumeMouse="0">
     <!-- Settler Recommendation UI Floating Panel -->
     <Grid ID="SettlerRecommendationPanel" Anchor="L,T" Offset="18,180" Size="340,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
         <Image Texture="Controls_GradientSmall" Size="340,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
@@ -33,7 +33,7 @@
     </Instance>
 
     <!-- City District Planning UI Floating Panel -->
-    <Grid ID="CityDistrictPlanPanel" Anchor="C,T" Offset="0,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
+    <Grid ID="CityDistrictPlanPanel" Anchor="L,T" Offset="500,70" Size="380,auto" AutoSizePadding="0,12" Texture="Controls_PanelBlue" SliceCorner="25,28" SliceSize="33,18" SliceTextureSize="83,75" Hidden="1" ConsumeMouse="1">
         <Image Texture="Controls_GradientSmall" Size="380,28" Color="0,0,0,180" Anchor="C,T" ConsumeMouse="0"/>
         <Stack StackGrowth="Down" StackPadding="6" Anchor="C,T" Offset="0,8" Size="360,auto">
             <Container Size="360,28">
